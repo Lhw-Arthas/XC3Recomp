@@ -161,6 +161,7 @@ uint64_t kernel_heap_size(void) { return heap_size; }  // bytes from HEAP_BASE s
 // [XC3] The SDK's virtual address memory (nn::os VammManager, over the alias region) is on only when GetInfo 16 is
 // non-zero, and AllocateAddressRegion does not check it: XC3 crashed at a null region manager with 0 here.
 static uint64_t sys_resource_size;
+static uint64_t phys_mapped;  // [XC3] bytes mapped by MapPhysicalMemory (counted with the heap in GetInfo 7)
 void kernel_set_system_resource_size(uint64_t size) { sys_resource_size = size; }
 // Writable guest data regions (heap, mapped/physical memory, module .data): for debug/runtime memory scans.
 int kernel_data_regions(uint64_t *addr, uint64_t *size, int max) {
@@ -966,7 +967,7 @@ static void svc_impl(Cpu *c, uint32_t imm, uint64_t pc) {
         case 4: v = HEAP_BASE; break;
         case 5: v = HEAP_MAX; break;
         case 6: case 21: v = 0xCD500000ull; break;  // application memory (3.2 GB, as on hardware)
-        case 7: case 22: v = heap_size + 0x4000000; break;
+        case 7: case 22: v = heap_size + phys_mapped + 0x4000000; break;
         case 8: v = 0; break;
         case 9: v = 0; break;
         case 11: v = diag_random64(); break;
@@ -985,11 +986,18 @@ static void svc_impl(Cpu *c, uint32_t imm, uint64_t pc) {
         break;
     }
     case 0x2C:  // MapPhysicalMemory(addr, size)
+        // [XC3] within the application's physical memory (GetInfo 6, shared with the heap): XC3 maps 1 MB pages into
+        // its 60 GB address region until this fails, and with no limit it committed 16 GB and filled the region table.
+        // 0x10801 = kernel LimitReached (the SDK's VammManager turns it into a plain allocation failure).
+        if (heap_size + phys_mapped + x[1] > 0xCD500000ull) { x[0] = 0x10801; break; }
         region_add(x[0], x[1], 0x7, 3);  // [XC3] (commits the range: before the memset, not after)
         memset((void *)x[0], 0, x[1]);
+        phys_mapped += x[1];
         x[0] = R_OK;
         break;
     case 0x2D:  // UnmapPhysicalMemory
+        for (int i = 0; i < nregions; i++)  // [XC3] give the pages back to the budget (exact mappings only)
+            if (regions[i].addr == x[0] && regions[i].type == 0x7) { phys_mapped -= regions[i].size; break; }
         region_remove(x[0]);
         x[0] = R_OK;
         break;
