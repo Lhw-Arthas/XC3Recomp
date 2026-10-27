@@ -1,0 +1,59 @@
+{
+ "id": "xc3",
+ "title_id": "010074f013262000",
+ "version": "2.2.0",
+ "version_code": null,
+ "modules": [
+  {
+   "name": "rtld",
+   "base": null,
+   "lift": false,
+   "build_id": "e79ab9af2ab05174"
+  },
+  {
+   "name": "main",
+   "base": "0x7000000000",
+   "lift": true,
+   "build_id": "82d187fe9ef9be92"
+  },
+  {
+   "name": "subsdk0",
+   "base": "0x7003000000",
+   "lift": false,
+   "build_id": "be1ee79a9968a35a"
+  },
+  {
+   "name": "sdk",
+   "base": "0x7004000000",
+   "lift": true,
+   "build_id": "e8cdceb1e77a8465"
+  }
+ ],
+ "exefs_required": [
+  "main",
+  "main.npdm",
+  "rtld",
+  "sdk",
+  "subsdk0"
+ ],
+ "romfs_manifest": {
+  "dirs": {
+   ".": [
+    2,
+    9714835256
+   ],
+   "movie": [
+    238,
+    1394896376
+   ],
+   "sound": [
+    10,
+    4084907582
+   ]
+  },
+  "files": 250,
+  "bytes": 15194639214,
+  "sha256": "dc707c535bee82227d44bfcb3c9805052c2072cab44c58d22aa2351932231e96"
+ },
+ "heap_max": "0xD0000000"
+}
