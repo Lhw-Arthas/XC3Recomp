@@ -37,6 +37,12 @@ static void module_init(Cpu *c, Module *m) {
 }
 static void rtld_init_sdk(Cpu *c) { module_init(c, &g_modules[1]); }
 static void rtld_init_main(Cpu *c) { module_init(c, &g_modules[0]); }
+// [XC3] The newer SDK's nn::init::Start takes three rtld callbacks (XC3 rtld +0x138c, +0x820, +0x870): x2 sets an rtld
+// flag (after nnosInitialize), x3 runs every module's init in reverse load order (sdk, then main; after
+// nninitStartup), x4 runs every module's fini after nnMain returns.
+static void rtld_flag(Cpu *c) { (void)c; }
+static void rtld_init_all(Cpu *c) { module_init(c, &g_modules[1]); module_init(c, &g_modules[0]); }
+static void rtld_fini_all(Cpu *c) { (void)c; LOG("[boot] nnMain returned (module finalizers not run)\n"); }
 
 __attribute__((constructor(101))) static void reserve_guest_space(void) {
     if (!plat_reserve_guest(GUEST_LO, GUEST_HI)) {
@@ -120,11 +126,18 @@ int main(int argc, char **argv) {
     LOG("main thread: prio %d, stack 0x%x\n", prio, stack_size);
 
     uint64_t start = loader_find_symbol("_ZN2nn4init5StartEmmPFvvES2_");
-    if (!start) FATAL("nn::init::Start not found\n");
-    uint64_t init_fn = hle_register("<rtld_init_sdk>", rtld_init_sdk);
-    uint64_t fini_fn = hle_register("<rtld_init_main>", rtld_init_main);
-    KThread *t = kernel_create_main_thread(start, stack_size, prio);
-    kernel_run_main(t, t->handle, 0, init_fn, fini_fn);
+    uint64_t start3 = start ? 0 : loader_find_symbol("_ZN2nn4init5StartEmmPFvvES2_S2_");  // [XC3] three callbacks
+    if (!start && !start3) FATAL("nn::init::Start not found\n");
+    KThread *t = kernel_create_main_thread(start ? start : start3, stack_size, prio);
+    if (start3) {
+        LOG("[boot] nn::init::Start with three rtld callbacks\n");
+        t->cpu.x[4] = hle_register("<rtld_fini_all>", rtld_fini_all);
+        kernel_run_main(t, t->handle, 0, hle_register("<rtld_flag>", rtld_flag), hle_register("<rtld_init_all>", rtld_init_all));
+    } else {
+        uint64_t init_fn = hle_register("<rtld_init_sdk>", rtld_init_sdk);
+        uint64_t fini_fn = hle_register("<rtld_init_main>", rtld_init_main);
+        kernel_run_main(t, t->handle, 0, init_fn, fini_fn);
+    }
 #ifdef XCDE_GFX
     extern int ui_run(void);  // window + Vulkan presenter on the main thread (runtime/nvn/vulkan/device.c)
     LOG("[boot] running with the window\n");
