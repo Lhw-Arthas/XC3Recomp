@@ -38,6 +38,8 @@ def sanitize(sym):
 
 
 class Module:
+    jt_guard_window = 16  # [XC3] instructions from a jump table's br back to its bounds check (games/<id>/profile.json)
+
     def __init__(self, name, path, base, simd='asm'):
         self.name = name
         self.nso = Nso(path)
@@ -210,7 +212,7 @@ class Module:
         # find the guarding b.hi / b.hs and its cmp, scanning backwards
         a = br_pc - 4
         guard = cmp = None
-        while a >= entry and br_pc - a <= 4 * 16:
+        while a >= entry and br_pc - a <= 4 * self.jt_guard_window:
             w = self.word(a)
             if (w & 0xFF000010) == 0x54000000 and bits(w, 0, 4) in (8, 2):
                 guard = a
@@ -291,7 +293,7 @@ class Module:
         """True if the br register comes from address arithmetic (a table) rather than a load."""
         rn = bits(self.word(br_pc), 5, 5)
         a = br_pc - 4
-        while a >= entry and br_pc - a <= 4 * 16:
+        while a >= entry and br_pc - a <= 4 * self.jt_guard_window:
             w = self.word(a)
             if self.lift(a).kind not in ('op', 'asm'):
                 return False
@@ -489,10 +491,10 @@ PATCHES = {}
 RANDO_CODE = {}
 
 
-def adr_targets(words, lo, in_text):
+def adr_targets(words, lo, in_text, window=8):
     """Code addresses materialized by ADR (callbacks): extra function starts.  [XCDE]
 
-    An ADR that is followed within 8 words by a `br xN` is the base of a jump table's cases (clang's
+    An ADR that is followed within `window` words (8; XC3: games/xc3/profile.json) by a `br xN` is the base of a jump table's cases (clang's
     byte/halfword offset tables): it points into the middle of the function, so it must not start a function
     (that split the function before its cases, and the table resolver found targets outside it).
     """
@@ -501,7 +503,7 @@ def adr_targets(words, lo, in_text):
     for i, w in enumerate(words):
         if (w & 0x9F000000) != 0x10000000:
             continue
-        if any((words[i + k] & 0xFFFFFC1F) == 0xD61F0000 for k in range(1, 9) if i + k < n):
+        if any((words[i + k] & 0xFFFFFC1F) == 0xD61F0000 for k in range(1, window + 1) if i + k < n):
             continue
         imm = ((w >> 5) & 0x7FFFF) << 2 | ((w >> 29) & 3)
         if imm & (1 << 20):
@@ -538,12 +540,17 @@ def main():
     ap.add_argument('--patches')  # [XCDE] games/<id>/patches.py
     ap.add_argument('--simd', choices=('asm', 'c'),
                     default='asm' if platform.machine().lower() in ('arm64', 'aarch64') else 'c')
+    # [XC3] heuristics windows, from the game profile (gen_all.py): XC3's clang puts up to 9 words between a jump
+    # table's ADR and its br, and up to 28 instructions between the br and its bounds check
+    ap.add_argument('--adr-br-window', type=int, default=8)
+    ap.add_argument('--jt-guard-window', type=int, default=16)
     args = ap.parse_args()
 
     t0 = time.time()
     import patchfmt  # [XCDE]
     PATCHES.update(patchfmt.load_patches(args.patches))
     m = Module(args.name, args.nso, args.base, args.simd)
+    m.jt_guard_window = args.jt_guard_window
     starts = m.boundaries()
     hle = {}
     if args.hle and os.path.exists(args.hle):
@@ -578,7 +585,7 @@ def main():
                 t = adrp_regs[rn][0] + ((w >> 10) & 0xFFF)
                 if m.in_text(t):
                     start_set.add(t)
-    start_set |= adr_targets(m.words, m.lo, m.in_text)  # [XCDE]
+    start_set |= adr_targets(m.words, m.lo, m.in_text, args.adr_br_window)  # [XCDE]
     scanned = {}
     rounds = 0
     while True:

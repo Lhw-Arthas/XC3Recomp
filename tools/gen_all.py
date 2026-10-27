@@ -47,6 +47,11 @@ def main(argv=None):
         out = os.path.join(a.out, m['name'])
         cmd = [sys.executable, '-E', '-s', gen, m['name'], os.path.join(a.exefs, m['name']), m['base'], out,
                '--simd', a.simd, '--patches', a.patches, '--hle', a.hle]
+        lift = prof.get('lifter', {})  # [XC3] optional heuristics windows (gen.py's defaults otherwise)
+        if 'adr_br_window' in lift:
+            cmd += ['--adr-br-window', str(lift['adr_br_window'])]
+        if 'jt_guard_window' in lift:
+            cmd += ['--jt-guard-window', str(lift['jt_guard_window'])]
         log = open(os.path.join(a.out, m['name'] + '.log'), 'w') if os.path.isdir(a.out) else None
         if log is None:
             os.makedirs(a.out, exist_ok=True)
