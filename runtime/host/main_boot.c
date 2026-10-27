@@ -112,18 +112,20 @@ int main(int argc, char **argv) {
     kernel_init();
     dispatch_init();
 
-    uint32_t stack_size = 0x100000;
+    uint32_t stack_size = 0x100000, sys_resource = 0;
     int prio = 44;
     FILE *f = fopen(npdm_path, "rb");
     if (f) {
         uint8_t meta[0x80];
         if (fread(meta, 1, sizeof meta, f) == sizeof meta && !memcmp(meta, "META", 4)) {
             prio = meta[0xE];
+            sys_resource = *(uint32_t *)(meta + 0x14);  // [XC3] system resource size: 32 MB in XC3's npdm
             stack_size = *(uint32_t *)(meta + 0x1C);
         }
         fclose(f);
     }
-    LOG("main thread: prio %d, stack 0x%x\n", prio, stack_size);
+    kernel_set_system_resource_size(sys_resource);
+    LOG("main thread: prio %d, stack 0x%x, system resource 0x%x\n", prio, stack_size, sys_resource);
 
     uint64_t start = loader_find_symbol("_ZN2nn4init5StartEmmPFvvES2_");
     uint64_t start3 = start ? 0 : loader_find_symbol("_ZN2nn4init5StartEmmPFvvES2_S2_");  // [XC3] three callbacks

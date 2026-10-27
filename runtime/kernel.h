@@ -80,3 +80,4 @@ KEvent *kernel_create_event_pair(uint32_t *writable, uint32_t *readable);
 KThread *kernel_current_thread(void);
 void kernel_dump_threads(FILE *out);  // [XCDE] watchdog: one line per thread (state, last SVC, wait address)
 uint64_t kernel_heap_size(void);  // bytes from HEAP_BASE set by SetHeapSize
+void kernel_set_system_resource_size(uint64_t size);  // [XC3] from main.npdm: GetInfo 16 (enables the SDK's VAMM)

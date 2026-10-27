@@ -158,6 +158,10 @@ static int nregions;
 static uint64_t heap_size;
 static uint64_t tls_next = TLS_BASE;
 uint64_t kernel_heap_size(void) { return heap_size; }  // bytes from HEAP_BASE set by SetHeapSize
+// [XC3] The SDK's virtual address memory (nn::os VammManager, over the alias region) is on only when GetInfo 16 is
+// non-zero, and AllocateAddressRegion does not check it: XC3 crashed at a null region manager with 0 here.
+static uint64_t sys_resource_size;
+void kernel_set_system_resource_size(uint64_t size) { sys_resource_size = size; }
 // Writable guest data regions (heap, mapped/physical memory, module .data): for debug/runtime memory scans.
 int kernel_data_regions(uint64_t *addr, uint64_t *size, int max) {
     int n = 0;
@@ -970,7 +974,8 @@ static void svc_impl(Cpu *c, uint32_t imm, uint64_t pc) {
         case 13: v = GUEST_HI - GUEST_LO; break;
         case 14: v = STACK_BASE; break;
         case 15: v = STACK_SIZE; break;
-        case 16: case 17: v = 0; break;
+        case 16: v = sys_resource_size; break;  // [XC3] system resource size (main.npdm)
+        case 17: v = 0; break;                  // (its use: not tracked)
         case 18: v = 0x01006BB00C6F0000ull; break;
         case 20: v = 0; break;
         default: r = R_INVALID_ENUM; LOG("[kernel] GetInfo unknown id %u/%llu\n", id0, x[3]);
@@ -980,8 +985,8 @@ static void svc_impl(Cpu *c, uint32_t imm, uint64_t pc) {
         break;
     }
     case 0x2C:  // MapPhysicalMemory(addr, size)
+        region_add(x[0], x[1], 0x7, 3);  // [XC3] (commits the range: before the memset, not after)
         memset((void *)x[0], 0, x[1]);
-        region_add(x[0], x[1], 0x7, 3);
         x[0] = R_OK;
         break;
     case 0x2D:  // UnmapPhysicalMemory
