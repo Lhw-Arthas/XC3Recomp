@@ -474,26 +474,35 @@ NVN(nvnTextureCompare) {
 NVN(nvnTextureFlushTexels) { (void)c; }
 NVN(nvnTextureInvalidateTexels) { (void)c; }
 
-// Texture views (our layout of the 0x28-byte guest struct)
-#define TV(T, off) G(T, A(0), off)
-NVN(nvnTextureViewSetDefaults) { memset(AP(0), 0, 0x28); }
-NVN(nvnTextureViewSetLevels) { TV(uint32_t, 0) |= 1; TV(uint16_t, 4) = (uint16_t)A(1); TV(uint16_t, 6) = (uint16_t)A(2); }
-NVN(nvnTextureViewSetLayers) { TV(uint32_t, 0) |= 2; TV(uint16_t, 8) = (uint16_t)A(1); TV(uint16_t, 10) = (uint16_t)A(2); }
-NVN(nvnTextureViewSetFormat) { TV(uint32_t, 0) |= 4; TV(uint32_t, 12) = (uint32_t)A(1); }
+// Texture views: GuestTextureView in the game's struct (nvn.h; XCDE: the 0x28-byte layout, XC3: 16 bytes)
+#define TV ((GuestTextureView *)AP(0))
+void nvn_view_from_guest(const void *guest, NvnTextureView *v) {
+#ifdef GAME_XCDE
+    memcpy(v, guest, sizeof *v);
+#else
+    const GuestTextureView *g = guest;
+    *v = (NvnTextureView){g->setmask, g->base_level, g->num_levels, g->min_layer, g->num_layers, g->format, g->target,
+                          g->ds_mode, {g->swizzle[0], g->swizzle[1], g->swizzle[2], g->swizzle[3]}};
+#endif
+}
+NVN(nvnTextureViewSetDefaults) { memset(AP(0), 0, GUEST_VIEW_DEFAULTS_SIZE); }
+NVN(nvnTextureViewSetLevels) { TV->setmask |= 1; TV->base_level = (uint16_t)A(1); TV->num_levels = (uint16_t)A(2); }
+NVN(nvnTextureViewSetLayers) { TV->setmask |= 2; TV->min_layer = (uint16_t)A(1); TV->num_layers = (uint16_t)A(2); }
+NVN(nvnTextureViewSetFormat) { TV->setmask |= 4; TV->format = (uint32_t)A(1); }
 NVN(nvnTextureViewSetSwizzle) {
-    NvnTextureView *v = AP(0);
+    GuestTextureView *v = TV;
     v->setmask |= 8;
     v->swizzle[0] = (uint8_t)A(1); v->swizzle[1] = (uint8_t)A(2); v->swizzle[2] = (uint8_t)A(3); v->swizzle[3] = (uint8_t)A(4);
 }
-NVN(nvnTextureViewSetDepthStencilMode) { NvnTextureView *v = AP(0); v->setmask |= 16; v->ds_mode = (uint32_t)A(1); }
-NVN(nvnTextureViewSetTarget) { NvnTextureView *v = AP(0); v->setmask |= 32; v->target = (uint32_t)A(1); }
-NVN(nvnTextureViewGetLevels) { *(int32_t *)AP(1) = TV(uint16_t, 4); *(int32_t *)AP(2) = TV(uint16_t, 6); RET(TV(uint32_t, 0) & 1); }
-NVN(nvnTextureViewGetLayers) { *(int32_t *)AP(1) = TV(uint16_t, 8); *(int32_t *)AP(2) = TV(uint16_t, 10); RET(!!(TV(uint32_t, 0) & 2)); }
-NVN(nvnTextureViewGetFormat) { *(uint32_t *)AP(1) = TV(uint32_t, 12); RET(!!(TV(uint32_t, 0) & 4)); }
-NVN(nvnTextureViewGetSwizzle) { NvnTextureView *v = AP(0); for (int i = 0; i < 4; i++) *(uint32_t *)AP(1 + i) = v->swizzle[i]; RET(!!(v->setmask & 8)); }
-NVN(nvnTextureViewGetDepthStencilMode) { NvnTextureView *v = AP(0); *(uint32_t *)AP(1) = v->ds_mode; RET(!!(v->setmask & 16)); }
-NVN(nvnTextureViewGetTarget) { NvnTextureView *v = AP(0); *(uint32_t *)AP(1) = v->target; RET(!!(v->setmask & 32)); }
-NVN(nvnTextureViewCompare) { RET(memcmp(AP(0), AP(1), 0x1C) == 0); }
+NVN(nvnTextureViewSetDepthStencilMode) { TV->setmask |= 16; TV->ds_mode = (uint32_t)A(1); }
+NVN(nvnTextureViewSetTarget) { TV->setmask |= 32; TV->target = (uint32_t)A(1); }
+NVN(nvnTextureViewGetLevels) { *(int32_t *)AP(1) = TV->base_level; *(int32_t *)AP(2) = TV->num_levels; RET(TV->setmask & 1); }
+NVN(nvnTextureViewGetLayers) { *(int32_t *)AP(1) = TV->min_layer; *(int32_t *)AP(2) = TV->num_layers; RET(!!(TV->setmask & 2)); }
+NVN(nvnTextureViewGetFormat) { *(uint32_t *)AP(1) = TV->format; RET(!!(TV->setmask & 4)); }
+NVN(nvnTextureViewGetSwizzle) { GuestTextureView *v = TV; for (int i = 0; i < 4; i++) *(uint32_t *)AP(1 + i) = v->swizzle[i]; RET(!!(v->setmask & 8)); }
+NVN(nvnTextureViewGetDepthStencilMode) { *(uint32_t *)AP(1) = TV->ds_mode; RET(!!(TV->setmask & 16)); }
+NVN(nvnTextureViewGetTarget) { *(uint32_t *)AP(1) = TV->target; RET(!!(TV->setmask & 32)); }
+NVN(nvnTextureViewCompare) { RET(memcmp(AP(0), AP(1), sizeof(GuestTextureView)) == 0); }
 
 NVN(nvnTextureWriteTexels) {
     // (texture, view, region, data) -- linear data into block-linear storage
@@ -513,11 +522,11 @@ NVN(nvnTextureReadTexels) { LOG("[nvn] ReadTexels not implemented\n"); (void)c; 
 NVN(nvnTextureReadTexelsStrided) { (void)c; }
 
 // ================================================================== samplers
-// SamplerBuilder: device@0 then an NvnSamplerDesc at 8
-#define SD ((NvnSamplerDesc *)(AP(0) + 8))
+// SamplerBuilder: device@0 then a GuestSamplerDesc at 8 (nvn.h; XCDE: an NvnSamplerDesc)
+#define SD ((GuestSamplerDesc *)(AP(0) + 8))
 NVN(nvnSamplerBuilderSetDevice) { G(uint64_t, A(0), 0) = A(1); }
 NVN(nvnSamplerBuilderSetDefaults) {
-    NvnSamplerDesc *d = SD;
+    GuestSamplerDesc *d = SD;
     memset(d, 0, sizeof *d);
     d->min_filter = 0; d->mag_filter = 0;
     d->wrap[0] = d->wrap[1] = d->wrap[2] = 1;  // REPEAT
@@ -550,7 +559,14 @@ NVN(nvnSamplerBuilderGetLodSnap) { RETF(0); }
 
 NVN(nvnSamplerInitialize) {
     NvnSamplerDesc *d = malloc(sizeof *d);
+#ifdef GAME_XCDE
     *d = *(NvnSamplerDesc *)(AP(1) + 8);
+#else
+    const GuestSamplerDesc *g = (const GuestSamplerDesc *)(AP(1) + 8);
+    *d = (NvnSamplerDesc){g->min_filter, g->mag_filter, {g->wrap[0], g->wrap[1], g->wrap[2]}, g->compare_mode,
+                          g->compare_func, g->reduction, g->lod_min, g->lod_max, g->lod_bias, g->max_aniso,
+                          {g->border[0], g->border[1], g->border[2], g->border[3]}, NULL};
+#endif
     SET_HOST(A(0), d);
     RET(1);
 }
@@ -622,7 +638,7 @@ static void register_texture(Cpu *c) {
     memset(&v, 0, sizeof v);
     v.tex = HOST(NvnTexture, A(2));
     v.has_view = A(3) != 0;
-    if (v.has_view) memcpy(&v.view, AP(3), sizeof v.view);
+    if (v.has_view) nvn_view_from_guest(AP(3), &v.view);
     extern uint64_t renderer_present_count(void);
     v.reg_frame = (uint32_t)renderer_present_count();
     backend_pool_write(&((NvnTexEntry *)d->entries)[id], &v, sizeof v, 1);  // [XCDE] T240: in command order (exec.c)
