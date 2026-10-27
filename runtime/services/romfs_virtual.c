@@ -87,6 +87,10 @@ static void edit_ini(File *f, const char *edits) {
 static void maybe_edit(File *f) {
     extern bool kbicons_wanted(const char *path), kbicons_init(void), settings_mod_enabled(const char *name);
     extern uint8_t *kbicons_make(const char *path, uint64_t *len);
+#ifndef GAME_XCDE
+    (void)f;
+    return;  // [XC3] both edits below rewrite XCDE files (menu/image/*.wilay, lib_nx.ini); XC3's are not mapped yet
+#endif
     if (kbicons_wanted(f->path)) {  // [XCDE] T234: keyboard button prompts (runtime/services/kbicons.c)
         static int loaded;
         if (!loaded++) settings_load();

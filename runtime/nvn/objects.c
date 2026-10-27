@@ -169,6 +169,7 @@ NVN(nvnSyncWait) {  // NVN_SYNC_WAIT_RESULT_ALREADY_SIGNALED
     static int whole = -1;  // LARECOMP_SYNC_ALL=1: old behaviour, wait for all submitted work
     if (whole < 0) whole = getenv("LARECOMP_SYNC_ALL") ? 1 : 0;
     if (backend_async()) { if (flush || whole) backend_drain(); else backend_wait_ticket(sync_of(A(0))->ticket); }
+#ifdef GAME_XCDE  // [XC3] keyed on the return address of XCDE's limiter
     {   // [XCDE] perf (frame lag): the game's frame limiter (f_70005bcfe0 -> f_7000603900) waits at
         // the end of every frame for the GPU to finish that frame: CPU and GPU take turns. With the async worker the
         // frame's CPU-side data is captured once its jobs ran: wait for the GPU of the previous frame instead.
@@ -195,6 +196,7 @@ NVN(nvnSyncWait) {  // NVN_SYNC_WAIT_RESULT_ALREADY_SIGNALED
             return;
         }
     }
+#endif
     if (flush) renderer_flush();
     else if (whole) renderer_sync();
     else renderer_wait_seq(sync_of(A(0))->seq);  // only the submission that holds this fence

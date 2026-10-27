@@ -877,6 +877,13 @@ static void ent_scan(Cpu *c, uint64_t frame) {
 }
 
 void party_game_tick(Cpu *c, uint64_t frame) {
+#ifndef GAME_XCDE
+    // [XC3] everything past here calls XCDE functions / scans for XCDE vtables. Requests from the keys are dropped
+    // (party_macro_buttons stays 0, party_camera_direct false: the mouse goes through the stick conversion).
+    frames30_update(frame);
+    (void)c;
+    return;
+#endif
     ent_scan(c, frame);
     frames30_update(frame);
     debug_fixed(c, frame);

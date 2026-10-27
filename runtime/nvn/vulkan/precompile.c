@@ -420,9 +420,14 @@ static _Atomic size_t next_var;
 static _Atomic uint64_t n_var_built, n_var_failed;
 static Map var_done;
 static void load_seed_file(const char *path, Map *done);
+#ifdef GAME_XCDE
+#define VARIANT_SEED "data/variants_seed.bin"
+#else
+#define VARIANT_SEED "data/variants_seed_xc3.bin"  // [XC3] none yet (XCDE's seed only holds XCDE's shaders)
+#endif
 static void load_seed(void) {
     Map done = {0};
-    load_seed_file("data/variants_seed.bin", &done);
+    load_seed_file(VARIANT_SEED, &done);
     load_seed_file("cache/variants.bin", &done);
 }
 static void load_seed_file(const char *path, Map *done_) {

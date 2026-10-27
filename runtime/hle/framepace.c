@@ -73,6 +73,9 @@ uint64_t g_limiter_slept_ns;  // (stats)
 // its neighbours: 120 -> 10, floats 20 -> 0.5, 10 -> 5.5), and 0x70012d47b4 is 0 instead of 0x72 - both, only while
 // a cutscene runs. Changes are logged.
 bool xcde_in_cutscene(void) {
+#ifndef GAME_XCDE
+    return false;  // [XC3] the addresses below are XCDE's; XC3's cutscene state is not found yet
+#endif
     // (the camera block alone dropped out for shots with a field-like camera inside a cutscene: 0x70012b9410 - 0x7203 in
     // field / menu / battle, 0x7003 for the whole Dickson scene - and 0x70012d47b4 hold through them)
     uint32_t mode = *(volatile uint32_t *)(uintptr_t)0x70012b9410ull;
@@ -105,6 +108,9 @@ bool xcde_cutscene_30(void) { return g_cut30; }
 int xcde_present_fps(void) { return g_cut30 ? 30 : g_settings.fps; }
 
 static void fps_interval_force(void) {
+#ifndef GAME_XCDE
+    return;  // [XC3] writes XCDE's frame interval pointer and period constant: XC3's limiter is not found yet
+#endif
     static int want = -2;
     static float scale = -1;
     static uint64_t after, after_frames, frames;

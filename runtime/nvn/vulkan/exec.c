@@ -3033,7 +3033,11 @@ static void var_load(void) {
     {   // [XCDE] T211: the shipped seed (data/variants_seed.bin: variants recorded in real play, tools/merge_variants.py):
         // a new player's first visit to an area finds them known as if seen before (prewarmed at its loading screen)
         size_t n0 = var_n;
+#ifdef GAME_XCDE
         FILE *sf = fopen("data/variants_seed.bin", "rb");
+#else
+        FILE *sf = fopen("data/variants_seed_xc3.bin", "rb");  // [XC3] none yet (XCDE's seed only holds XCDE's shaders)
+#endif
         uint32_t hdr[2];
         if (sf && fread(hdr, 4, 2, sf) == 2 && hdr[0] == 0x56435843u && hdr[1] == (uint32_t)sizeof(Variant)) {
             Variant v;
