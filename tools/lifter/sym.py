@@ -7,7 +7,11 @@ import sys
 import capstone
 from nso import Nso
 
-MODS = [('main', 0x7000000000), ('sdk', 0x7004000000)]
+sys.path.insert(0, '..')
+import game  # noqa: E402
+import json  # noqa: E402
+
+MODS = [(m['name'], int(m['base'], 16)) for m in json.load(open(game.path('profile.json')))['modules'] if m['lift']]
 _cache = {}
 
 

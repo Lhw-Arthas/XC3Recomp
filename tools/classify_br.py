@@ -15,6 +15,8 @@ ROOT = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..')
 sys.path.insert(0, os.path.join(ROOT, 'tools', 'lifter'))
 import capstone  # noqa: E402
 import gen  # noqa: E402
+sys.path.insert(0, os.path.join(ROOT, 'tools'))
+import game  # noqa: E402
 
 
 def main():
@@ -23,7 +25,7 @@ def main():
     ap.add_argument('--show', type=int, default=6)
     ap.add_argument('--back', type=int, default=12)
     a = ap.parse_args()
-    prof = json.load(open(os.path.join(ROOT, 'games', 'xcde', 'profile.json')))
+    prof = json.load(open(game.path('profile.json')))
     mod = next(m for m in prof['modules'] if m['name'] == a.module)
     base = int(mod['base'], 16)
     m = gen.Module(a.module, os.path.join(ROOT, 'targets', 'exefs', a.module), base, 'c')

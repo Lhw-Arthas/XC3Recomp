@@ -13,6 +13,8 @@ import sys
 
 ROOT = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..')
 sys.path.insert(0, os.path.join(ROOT, 'tools', 'lifter'))
+sys.path.insert(0, os.path.join(ROOT, 'tools'))
+import game  # noqa: E402
 
 
 def parse_log(path):
@@ -32,7 +34,7 @@ def fn_addrs(table_c):
 
 def main(argv=None):
     ap = argparse.ArgumentParser()
-    ap.add_argument('--profile', default=os.path.join(ROOT, 'games', 'xcde', 'profile.json'))
+    ap.add_argument('--profile', default=game.path('profile.json'))
     ap.add_argument('--exefs', default=os.path.join(ROOT, 'targets', 'exefs'))
     ap.add_argument('--gen', default=os.path.join(ROOT, 'generated'))
     ap.add_argument('--evidence', default=os.path.join(ROOT, 'docs', 'evidence', 'M1'))

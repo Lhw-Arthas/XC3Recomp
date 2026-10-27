@@ -13,7 +13,9 @@ import os, re, sys
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 OUT = os.path.join(ROOT, 'docs', 'hle_audit.md')
-MANIFEST = os.path.join(ROOT, 'games', 'xcde', 'hle_classes.tsv')
+sys.path.insert(0, os.path.join(ROOT, 'tools'))
+import game  # noqa: E402
+MANIFEST = game.path('hle_classes.tsv')
 COVERAGE = os.path.join(ROOT, 'docs', 'evidence', 'M3', 'hle_coverage.tsv')
 CLASSES = ('real', 'simplified', 'stub')
 

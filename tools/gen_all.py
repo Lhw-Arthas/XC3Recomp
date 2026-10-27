@@ -1,6 +1,6 @@
 """Generate C for every module the game profile marks `lift` (T011/T013). Output: generated/<module>/*.c
 
-Usage: gen_all.py [--profile games/xcde/profile.json] [--exefs targets/exefs] [--out generated] [--jobs N]
+Usage: gen_all.py [--profile games/$XCDE_GAME/profile.json] [--exefs targets/exefs] [--out generated] [--jobs N]
 Prints a sha256 over the generated tree (names + contents) so a run can be compared with another (NFR-006).
 """
 import argparse
@@ -10,6 +10,8 @@ import os
 import subprocess
 import sys
 import time
+
+import game
 
 ROOT = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..')
 
@@ -28,11 +30,11 @@ def tree_hash(path):
 
 def main(argv=None):
     ap = argparse.ArgumentParser()
-    ap.add_argument('--profile', default=os.path.join(ROOT, 'games', 'xcde', 'profile.json'))
+    ap.add_argument('--profile', default=game.path('profile.json'))
     ap.add_argument('--exefs', default=os.path.join(ROOT, 'targets', 'exefs'))
     ap.add_argument('--out', default=os.path.join(ROOT, 'generated'))
-    ap.add_argument('--patches', default=os.path.join(ROOT, 'games', 'xcde', 'patches.py'))
-    ap.add_argument('--hle', default=os.path.join(ROOT, 'games', 'xcde', 'hle_symbols.txt'))
+    ap.add_argument('--patches', default=game.path('patches.py'))
+    ap.add_argument('--hle', default=game.path('hle_symbols.txt'))
     ap.add_argument('--simd', default='c', choices=('c', 'asm'))
     a = ap.parse_args(argv)
     prof = json.load(open(a.profile, encoding='utf-8'))

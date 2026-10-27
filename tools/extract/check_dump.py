@@ -12,6 +12,8 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from manifest import build_manifest  # noqa: E402
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), '..'))
+import game  # noqa: E402
 
 ERR_OK, ERR_USAGE, ERR_CONTAINER, ERR_EXEFS, ERR_VERSION, ERR_ROMFS = 0, 1, 2, 3, 4, 5
 CONTAINER_EXT = ('.nsp', '.xci', '.nca', '.nsz', '.xcz')
@@ -122,8 +124,7 @@ def main(argv=None):
     ap.add_argument('dump', nargs='?')
     ap.add_argument('--exefs')
     ap.add_argument('--romfs')
-    ap.add_argument('--profile', default=os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', '..',
-                                                       'games', 'xcde', 'profile.json'))
+    ap.add_argument('--profile', default=game.path('profile.json'))
     a = ap.parse_args(argv)
     with open(a.profile, encoding='utf-8') as f:
         profile = json.load(f)

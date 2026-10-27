@@ -8,6 +8,8 @@ cd "$(dirname "$0")/.."
 step() { echo; echo "=== $* ==="; }
 [ -x .venv/Scripts/python ] || [ -f .venv/Scripts/python.exe ] || { echo "missing .venv (run \"Build Monado.bat\" or see the README)"; exit 1; }
 step "1/5 Checking the game files (targets/)"
+export XCDE_GAME=${XCDE_GAME:-xc3}
+echo "game: games/$XCDE_GAME"
 .venv/Scripts/python -X utf8 tools/extract/check_dump.py targets
 step "2/5 Recompiling the game code into C (generated/, ~1 min)"
 (cd tools && ../.venv/Scripts/python -X utf8 gen_all.py --out ../generated)
