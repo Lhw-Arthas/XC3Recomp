@@ -137,7 +137,11 @@ int ipc_handle_request(Cpu *c, uint32_t handle) {
         req.nc = ncd;
     }
 
-    if (req.type == 2) {  // close
+    // [XC3] TIPC (the newer SDK's sm: client): type = 16 + command, the raw data right after the handles (no 16-byte
+    // alignment, no SFCI), no domains. Layout read from XC3's nn::sm::Initialize / GetServiceHandle (sdk+37f750, +37f8e0).
+    bool tipc = req.type >= 16;
+    if (req.type == 15) LOG("[ipc] TIPC close? (type 15) on %s (handle %x)\n", sess->svc->name, handle);  // (unverified)
+    if (req.type == 2 || req.type == 15) {  // close
         LOG("[ipc] close session %s (handle %x)\n", sess->svc->name, handle);
         if (!sess->domain) service_release(sess->svc);  // (a domain's objects stay: closed one by one)
         return 0;
@@ -201,6 +205,12 @@ int ipc_handle_request(Cpu *c, uint32_t handle) {
         default:
             LOG("[ipc] control cmd %u\n", req.cmd);
         }
+    } else if (tipc) {
+        req.cmd = req.type - 16;
+        req.data = (const uint8_t *)raw;
+        req.data_size = raw_words * 4;
+        if (diag_usage_on()) diag_use("ipc", "%s tipc cmd %u", sess->svc->name, req.cmd);
+        sess->svc->handler(sess->svc, &req, &resp);
     } else {
         LOG("[ipc] message type %u\n", req.type);
     }
@@ -223,6 +233,19 @@ write_response:;
     memset(msg, 0, 0x100);
     uint32_t *w = msg;
     int has_handles = resp.ncopy || resp.nmove;
+    if (tipc) {  // [XC3] header, handles, then the result and the data as raw words
+        w[0] = req.type;
+        w[1] = (1 + (resp.data_size + 3) / 4) | (has_handles ? 0x80000000u : 0);
+        uint32_t *q = w + 2;
+        if (has_handles) {
+            *q++ = (resp.ncopy << 1) | (resp.nmove << 5);
+            for (int i = 0; i < resp.ncopy; i++) *q++ = resp.copy_handles[i];
+            for (int i = 0; i < resp.nmove; i++) *q++ = resp.move_handles[i];
+        }
+        *q++ = resp.result;
+        memcpy(q, resp.data, resp.data_size);
+        return 0;
+    }
     uint32_t payload_words = 4 + (resp.data_size + 3) / 4;   // SFCO header + data
     if (dom) payload_words += 4 + ndomain_out;
     uint32_t raw_size = payload_words + 4;  // + alignment padding
