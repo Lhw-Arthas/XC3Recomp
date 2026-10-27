@@ -16,6 +16,10 @@ if [ "${XCDE_GAME:-xc3}" = xcde ]; then CF="$CF -DGAME_XCDE"; fi
 # [XC3] 64-bit off_t / stat (as runtime/platform/win_compat.h asks): with mingw's 32-bit ones stat() fails on files over
 # 2 GB and the virtual romfs left out XC3's 9.7 GB bf3.ard. (XCDE: unchanged; none of its files is that large.)
 if [ "${XCDE_GAME:-xc3}" != xcde ]; then CF="$CF -D_FILE_OFFSET_BITS=64"; fi
+# [XC3] the language served to the game when the player picked none: the profile's default_language (XC3: en-GB)
+lang=$(.venv/Scripts/python -c "import json,sys; print(json.load(open(sys.argv[1])).get('default_language', ''))" \
+       "games/${XCDE_GAME:-xc3}/profile.json" 2>/dev/null | tr -d '\r')
+if [[ "$lang" =~ ^[A-Za-z-]+$ ]]; then CF="$CF -DGAME_DEFAULT_LANGUAGE=\"$lang\""; fi
 RT="loader dispatch kernel ipc fnprof platform/windows services/fs services/romfs_virtual services/am services/acc services/time
     services/hid_set services/kbicons services/misc services/audio services/hwopus hle/heaps hle/pl hle/vi hle/nvn_boot hle/fibers hle/input hle/party
     hle/bindings hle/movie hle/framepace host/stubs host/settings_ini host/stubs_gfx host/gamelib_static host/main_boot diag/diag diag/sampler diag/watchdog

@@ -134,9 +134,14 @@ void settings_save(void) {
 }
 
 // The language served to the game: the setting; "auto" stays English (what every test route was recorded with).
+// [XC3] "auto" is the profile's default_language (scripts/build_rt_gfx.sh): XC3's romfs has British English ("gb"
+// folders) but no "us" ones, and with en-US its font and text tables never loaded.
+#ifndef GAME_DEFAULT_LANGUAGE
+#define GAME_DEFAULT_LANGUAGE "en-US"
+#endif
 const char *settings_language(void) {
     if (g_settings.language > 0 && g_settings.language < N_LANGUAGES) return g_language_codes[g_settings.language];
-    return "en-US";
+    return GAME_DEFAULT_LANGUAGE;
 }
 
 const char *settings_language_name(void) {

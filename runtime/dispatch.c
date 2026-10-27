@@ -233,13 +233,28 @@ void rt_fatal_trace(void) {
             fprintf(stderr, "  x%-2d %016llx  x%-2d %016llx  x%-2d %016llx  x%-2d %016llx\n", i, c->x[i], i + 1,
                     c->x[i + 1], i + 2, c->x[i + 2], i + 3, c->x[i + 3]);
         const char *dx = getenv("XCDE_CRASH_DUMP_REG");  // debug: hex dump of 0x80 bytes at guest register x<N>
+        const char *dl = getenv("XCDE_CRASH_DUMP_LEN");  // [XC3] (another length, e.g. 0x120 for a field past 0x80)
+        int len = dl ? (int)strtol(dl, NULL, 0) & ~3 : 0x80;
+        if (len <= 0 || len > 0x1000) len = 0x80;
         if (dx && atoi(dx) >= 0 && atoi(dx) < 31) {
             uint64_t a = c->x[atoi(dx)];
-            if (a >= GUEST_LO && a + 0x80 <= GUEST_HI) {
+            if (a >= GUEST_LO && a + len <= GUEST_HI) {
                 fprintf(stderr, "dump at x%s=%llx:", dx, (unsigned long long)a);
-                for (int i = 0; i < 0x80; i += 4) fprintf(stderr, "%s%08x", (i % 32) ? " " : "\n  ", *(volatile uint32_t *)(uintptr_t)(a + i));
+                for (int i = 0; i < len; i += 4) fprintf(stderr, "%s%08x", (i % 32) ? " " : "\n  ", *(volatile uint32_t *)(uintptr_t)(a + i));
                 fprintf(stderr, "\n");
             }
+        }
+        // [XC3] debug: XCDE_CRASH_DUMP_ADDR=<addr>:<len>[,<addr>:<len>...] hex dumps of guest memory at fixed addresses
+        // (module data; guest heap addresses change between runs, so a heap object needs XCDE_CRASH_DUMP_REG)
+        for (const char *p = getenv("XCDE_CRASH_DUMP_ADDR"); p && *p;) {
+            char *e;
+            uint64_t a = strtoull(p, &e, 0), n = *e == ':' ? strtoull(e + 1, &e, 0) & ~3ull : 0x80;
+            if (n && n <= 0x1000 && a >= GUEST_LO && a + n <= GUEST_HI) {
+                fprintf(stderr, "dump at %llx:", (unsigned long long)a);
+                for (uint64_t i = 0; i < n; i += 4) fprintf(stderr, "%s%08x", (i % 32) ? " " : "\n  ", *(volatile uint32_t *)(uintptr_t)(a + i));
+                fprintf(stderr, "\n");
+            }
+            p = *e == ',' ? e + 1 : "";
         }
     }
     plat_fatal_notice();

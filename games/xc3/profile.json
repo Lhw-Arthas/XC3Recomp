@@ -56,6 +56,7 @@
   "sha256": "dc707c535bee82227d44bfcb3c9805052c2072cab44c58d22aa2351932231e96"
  },
  "heap_max": "0xD0000000",
+ "default_language": "en-GB",
  "lifter": {
   "adr_br_window": 24,
   "jt_guard_window": 32

@@ -9,6 +9,9 @@ Settings g_settings = {.volume = 1.0f, .movie_audio = true};
 
 void settings_load(void) {}
 void settings_save(void) {}
-const char *settings_language(void) { return "en-US"; }
+#ifndef GAME_DEFAULT_LANGUAGE  // [XC3] the profile's default_language (scripts/build_rt_gfx.sh, settings_ini.c)
+#define GAME_DEFAULT_LANGUAGE "en-US"
+#endif
+const char *settings_language(void) { return GAME_DEFAULT_LANGUAGE; }
 const char *settings_language_name(void) { return "English"; }
 
