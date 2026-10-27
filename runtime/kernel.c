@@ -162,6 +162,20 @@ uint64_t kernel_heap_size(void) { return heap_size; }  // bytes from HEAP_BASE s
 // non-zero, and AllocateAddressRegion does not check it: XC3 crashed at a null region manager with 0 here.
 static uint64_t sys_resource_size;
 static uint64_t phys_mapped;  // [XC3] bytes mapped by MapPhysicalMemory (counted with the heap in GetInfo 7)
+#ifndef GAME_XCDE
+// [XC3] GetInfo 20: a page of the process the SDK writes into. nn::os::SetDyingMessageRegion (its only user in XC3's
+// sdk and main) stores the region at +0x1c0; with 0 here it wrote to address 0x1c0.
+static uint64_t user_page;  // (read and set with __atomic builtins)
+RT_ON_RESET(user_page_reset) { __atomic_store_n(&user_page, 0, __ATOMIC_SEQ_CST); }  // (in the HLE heap, which the reboot wipes)
+static uint64_t user_page_get(void) {
+    uint64_t p = __atomic_load_n(&user_page, __ATOMIC_SEQ_CST);
+    if (!p) {
+        uint64_t n = (uint64_t)(uintptr_t)hle_alloc(0x1000), want = 0;
+        p = __atomic_compare_exchange_n(&user_page, &want, n, false, __ATOMIC_SEQ_CST, __ATOMIC_SEQ_CST) ? n : want;
+    }
+    return p;
+}
+#endif
 void kernel_set_system_resource_size(uint64_t size) { sys_resource_size = size; }
 // Writable guest data regions (heap, mapped/physical memory, module .data): for debug/runtime memory scans.
 int kernel_data_regions(uint64_t *addr, uint64_t *size, int max) {
@@ -978,7 +992,11 @@ static void svc_impl(Cpu *c, uint32_t imm, uint64_t pc) {
         case 16: v = sys_resource_size; break;  // [XC3] system resource size (main.npdm)
         case 17: v = 0; break;                  // (its use: not tracked)
         case 18: v = 0x01006BB00C6F0000ull; break;
+#ifdef GAME_XCDE
         case 20: v = 0; break;
+#else
+        case 20: v = user_page_get(); break;  // [XC3] (see user_page)
+#endif
         default: r = R_INVALID_ENUM; LOG("[kernel] GetInfo unknown id %u/%llu\n", id0, x[3]);
         }
         x[0] = r;
