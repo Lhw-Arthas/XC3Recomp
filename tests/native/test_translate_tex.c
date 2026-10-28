@@ -6,7 +6,7 @@
 
 #include "../../runtime/nvn/maxwell/shader.h"
 
-ShaderInfo *maxwell_translate(const uint8_t *blob, size_t max_size, int stage, const ShaderKey *key);
+ShaderInfo *maxwell_translate(const uint8_t *blob, size_t max_size, size_t const_size, int stage, const ShaderKey *key);
 void maxwell_free(ShaderInfo *s);
 
 static int fails;
@@ -48,7 +48,7 @@ static ShaderInfo *translate(uint64_t instr) {
     code[0] = 0; code[1] = instr; code[2] = EXIT_W; code[3] = NOP_W;
     ShaderKey key; memset(&key, 0, sizeof key);
     key.glsl = 1;
-    return maxwell_translate(blob, sizeof blob, STAGE_FRAGMENT, &key);
+    return maxwell_translate(blob, sizeof blob, 0, STAGE_FRAGMENT, &key);
 }
 
 static void test_gather_components(void) {

@@ -109,6 +109,66 @@ static uint32_t norm_target(int64_t t) {
     return (uint32_t)t;
 }
 
+// [XC3] BRX jump tables. XC3 has 28 programs with BRX (XCDE none). Each one is a switch the compiler made into
+//     rX = min(idx, N)  (IMNMX imm, sometimes in an earlier block);  rX = rX << 2;  rY = c[1][rX + off];  BRX rY + imm
+// c[1] is the program's own compiler constants (nvn.h const_offset / const_size, after the code in the blob), so the
+// table can be read here: target k = pc + 8 + table[k] + imm, normalised as the emitted BRX does. Without this, a BRX
+// made every instruction a label and the stack resolution give up: AMD's compiler never finished such a program (12
+// shader workers spinning in amdvlk64.dll, every loading frame held 8 s). A BRX whose source is not such a load, or
+// whose table holds an invalid target, is not resolved: the program keeps every instruction a label, as before.
+#define BRX_MAX 64
+typedef struct { size_t at; int n; uint32_t t[BRX_MAX]; } BrxRes;
+static size_t writer_of(const uint64_t *code, size_t from, size_t lo, int r) {  // nearest earlier instruction writing r
+    for (size_t j = from; j-- > lo;) {
+        if (j % 4 == 0) continue;
+        uint64_t w = code[j];
+        uint32_t op = (uint32_t)(w >> 52);
+        if (op >= 0xe20 && op <= 0xe3f) continue;  // (control flow writes no register)
+        if ((int)bits(w, 0, 8) == r) return j;
+    }
+    return (size_t)-1;
+}
+static bool resolve_brx(const uint64_t *code, size_t end, const uint8_t *consts, size_t csize, size_t i, BrxRes *out) {
+    uint64_t w = code[i];
+    int ra = (int)bits(w, 8, 8);
+    int64_t imm = sbits(w, 20, 24);
+    size_t lo = i > 1024 ? i - 1024 : 0;
+    size_t j = writer_of(code, i, lo, ra);
+    if (j == (size_t)-1) return false;
+    uint64_t ld = code[j];
+    if ((ld & 0xfff8000000000000ull) != 0xef90000000000000ull || bits(ld, 36, 5) != 1 || bits(ld, 48, 3) != 4) return false;  // LDC.32 c[1]
+    uint32_t off = (uint32_t)bits(ld, 20, 16);
+    int limit = 0;  // entries, when the index is clamped by an IMNMX immediate (SHL #2 from it)
+    size_t k = writer_of(code, j, lo, (int)bits(ld, 8, 8));
+    if (k != (size_t)-1 && (code[k] & 0xfef8000000000000ull) == 0x3848000000000000ull && bits(code[k], 20, 19) == 2) {
+        size_t m = writer_of(code, k, lo, (int)bits(code[k], 8, 8));
+        uint64_t mn = m != (size_t)-1 ? code[m] : 0;
+        if ((mn & 0xfef8000000000000ull) == 0x3820000000000000ull && bits(mn, 39, 3) == PT && !bits(mn, 42, 1) &&
+            !bits(mn, 56, 1) && bits(mn, 20, 19) < BRX_MAX)
+            limit = (int)bits(mn, 20, 19) + 1;
+    }
+    out->at = i;
+    out->n = 0;
+    for (int e = 0; e < (limit ? limit : BRX_MAX); e++) {
+        if ((size_t)off + 4u * e + 4 > csize) break;
+        int32_t v = *(const int32_t *)(consts + off + 4u * e);
+        int64_t t = (int64_t)i * 8 + 8 + v + imm;
+        if (t < 8 || t % 8) break;
+        t = norm_target(t);
+        if ((size_t)(t / 8) >= end) break;
+        bool dup = false;
+        for (int q = 0; q < out->n; q++) dup |= out->t[q] == (uint32_t)t;
+        if (!dup) out->t[out->n++] = (uint32_t)t;
+        if (!limit && e + 1 == BRX_MAX) break;
+        if (limit && e + 1 == limit) return out->n > 0;
+    }
+    return !limit && out->n > 0;  // (a clamped table must be read whole)
+}
+static const BrxRes *brx_find(const BrxRes *b, int nb, size_t i) {
+    for (int q = 0; q < nb; q++) if (b[q].at == i) return &b[q];
+    return NULL;
+}
+
 // [XCDE] SSY/PBK/PCNT resolved at translation (idea from WindowSmash 316db6a / PokeZ-ARecomp 5a9fb4a). The translated
 // state machine kept those stacks as arrays indexed at run time: NVIDIA's compiler lost writes in such programs (a
 // lost push or pop sends the loop back to an earlier block until a GPU reset), and on AMD a dynamically indexed
@@ -116,10 +176,11 @@ static uint32_t norm_target(int64_t t) {
 // walked with the three stacks as the translation emits them (separate stacks, SYNC / BRK pop, CONT reads the top);
 // when every instruction is reached with the same stacks whatever the path, each SYNC / BRK / CONT has one known
 // target and is emitted as a plain jump. Anything else (two stack states meeting, a pop of an empty stack, an
-// overflow, BRX or another control instruction) returns NULL and the program keeps the arrays exactly as before.
+// overflow, an unresolved BRX or another control instruction) returns NULL and the program keeps the arrays exactly as
+// before. [XC3] A resolved BRX (resolve_brx) is followed to each of its table's targets with the same stacks.
 // XCDE_STATIC_STACKS=0: never resolve.
 typedef struct { uint8_t n[3]; uint32_t s[3][16]; } StkState;
-static uint32_t *resolve_stacks(const uint8_t *code8, size_t end) {
+static uint32_t *resolve_stacks(const uint8_t *code8, size_t end, const BrxRes *brx, int nbrx) {
     static int on = -1;
     if (on < 0) on = !getenv("XCDE_STATIC_STACKS") || atoi(getenv("XCDE_STATIC_STACKS")) != 0;
     if (!on || end < 2) return NULL;
@@ -176,6 +237,10 @@ static uint32_t *resolve_stacks(const uint8_t *code8, size_t end) {
             STK_REACH(t / 8, &T);
             if (guarded) STK_REACH(next, &S);
         } else if (top12 == 0xe300000000000000ull) {  // EXIT
+            if (guarded) STK_REACH(next, &S);
+        } else if (top12 == 0xe250000000000000ull && brx_find(brx, nbrx, i)) {  // [XC3] resolved BRX: each table target
+            const BrxRes *b = brx_find(brx, nbrx, i);
+            for (int q = 0; q < b->n; q++) STK_REACH(b->t[q] / 8, &S);
             if (guarded) STK_REACH(next, &S);
         } else if (top12 >= 0xe200000000000000ull && top12 <= 0xe3f0000000000000ull && top12 != 0xe330000000000000ull) {
             ok = false;  // BRX, JMX, CAL, RET, PRET, ...: not followed here
@@ -2435,7 +2500,7 @@ static ShaderInfo *glsl_finish(Ctx *c, bool any_branch, bool dbg) {
     return info;
 }
 
-ShaderInfo *maxwell_translate(const uint8_t *blob, size_t max_size, int stage, const ShaderKey *key) {
+ShaderInfo *maxwell_translate(const uint8_t *blob, size_t max_size, size_t const_size, int stage, const ShaderKey *key) {
     ShaderInfo *info = calloc(1, sizeof *info);
     info->stage = stage;
     Ctx *c = calloc(1, sizeof *c);
@@ -2469,6 +2534,21 @@ ShaderInfo *maxwell_translate(const uint8_t *blob, size_t max_size, int stage, c
         if (w == 0 && i > 4) break;
         end = i + 1;
     }
+    // [XC3] BRX jump tables (resolve_brx): the compiler constants follow the code in the blob (max_size = const_offset)
+    BrxRes *brxs = NULL;
+    int nbrx = 0;
+    bool brx_all = true;
+    for (size_t i = 0; i < end; i++) {
+        if (i % 4 == 0 || (((const uint64_t *)code)[i] & 0xfff0000000000000ull) != 0xe250000000000000ull) continue;
+        brxs = realloc(brxs, (size_t)(nbrx + 1) * sizeof *brxs);
+        if (!resolve_brx((const uint64_t *)code, end, blob + max_size, const_size, i, &brxs[nbrx])) { brx_all = false; break; }
+        nbrx++;
+    }
+    if (!brx_all) {
+        static int nlog;
+        if (nlog++ < 40) fprintf(stderr, "[xlat] BRX unresolved (stage %d, %zu instructions): every instruction stays a branch target\n", stage, end);
+        nbrx = 0;
+    }
     // collect branch targets (labels)
     uint8_t *label = calloc(end + 4, 1);
     label[1] = 1;
@@ -2486,9 +2566,11 @@ ShaderInfo *maxwell_translate(const uint8_t *blob, size_t max_size, int stage, c
             if (t >= 0 && (size_t)(t / 8) < end) label[t / 8] = 1;
             any_branch = true;
         }
-        if ((w & 0xfff0000000000000ull) == 0xe250000000000000ull) {  // BRX: any instruction may be a target
+        if ((w & 0xfff0000000000000ull) == 0xe250000000000000ull) {  // BRX: its table's targets, or any instruction
             any_branch = true;
-            memset(label, 1, end);
+            const BrxRes *b = brx_all ? brx_find(brxs, nbrx, i) : NULL;
+            if (b) for (int q = 0; q < b->n; q++) label[b->t[q] / 8] = 1;
+            else memset(label, 1, end);
         }
         if ((w & 0xfff8000000000000ull) == 0xf0f8000000000000ull || (w & 0xfff0000000000000ull) == 0xe340000000000000ull ||
             (w & 0xfff0000000000000ull) == 0xe350000000000000ull)
@@ -2518,7 +2600,7 @@ ShaderInfo *maxwell_translate(const uint8_t *blob, size_t max_size, int stage, c
                         (w & 0xff80000000000000ull) == 0x5180000000000000ull || (w & 0xfe80000000000000ull) == 0x3280000000000000ull;
             if ((fmul && ((w >> 44) & 3) >= 2) || (ffma && ((w >> 53) & 3) >= 2)) fmz++;
         }
-        uint32_t *rs = any_branch ? resolve_stacks(code, end) : NULL;
+        uint32_t *rs = any_branch ? resolve_stacks(code, end, brxs, nbrx) : NULL;
         fprintf(stderr, "[xlat-stats] %016llx stage %d insts %zu branchy %d ssy %d pbk %d brx %d bar %d fmz %d shfl %d resolved %d\n",
                 (unsigned long long)h, (int)stage, end, (int)any_branch, ssy, pbk, brx, bar, fmz, shfl, rs != NULL);
         free(rs);
@@ -2528,7 +2610,7 @@ ShaderInfo *maxwell_translate(const uint8_t *blob, size_t max_size, int stage, c
     static int annotate = -1;
     if (annotate < 0) annotate = getenv("LARECOMP_SAVE_MSL") != NULL;
     c->branchy = any_branch;
-    c->stk_tgt = any_branch ? resolve_stacks(code, end) : NULL;
+    c->stk_tgt = any_branch ? resolve_stacks(code, end, brxs, nbrx) : NULL;
     for (size_t i = 0; i < end && !c->fail; i++) {
         if (i % 4 == 0) continue;
         uint32_t pc = (uint32_t)(i * 8);
@@ -2544,6 +2626,7 @@ ShaderInfo *maxwell_translate(const uint8_t *blob, size_t max_size, int stage, c
         info->num_insts++;
     }
     free(label);
+    free(brxs);
     free(c->stk_tgt);
     c->stk_tgt = NULL;
     if (c->fail) { free(c->body.buf); free(c); return info; }

@@ -8,7 +8,7 @@
 
 #include "../../runtime/nvn/maxwell/shader.h"
 
-ShaderInfo *maxwell_translate(const uint8_t *blob, size_t max_size, int stage, const ShaderKey *key);
+ShaderInfo *maxwell_translate(const uint8_t *blob, size_t max_size, size_t const_size, int stage, const ShaderKey *key);
 
 static int fails;
 #define CHECK(cond) do { if (!(cond)) { printf("FAIL %s:%d: %s\n", __FILE__, __LINE__, #cond); fails++; } } while (0)
@@ -21,7 +21,7 @@ static ShaderInfo *translate(const ShaderKey *key) {
     memset(blob, 0, sizeof blob);
     uint64_t *code = (uint64_t *)(blob + 0x80);
     code[0] = 0; code[1] = NOP_W; code[2] = EXIT_W; code[3] = NOP_W;
-    return maxwell_translate(blob, sizeof blob, STAGE_VERTEX, key);
+    return maxwell_translate(blob, sizeof blob, 0, STAGE_VERTEX, key);
 }
 
 int main(void) {

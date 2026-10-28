@@ -687,10 +687,11 @@ NVN(nvnProgramSetSubroutineLinkage) { RET(1); }
 static struct { uint64_t h, len; uint8_t *p; } snap_tab[SNAP_TAB];
 static pthread_mutex_t snap_lock = PTHREAD_MUTEX_INITIALIZER;
 static uint64_t snap_bytes, snap_n;
-static const uint8_t *code_snapshot(uint64_t code, uint32_t const_offset) {
+static const uint8_t *code_snapshot(uint64_t code, uint32_t const_offset, uint32_t const_size) {
     if (getenv("XCDE_NO_CODE_SNAPSHOT")) return NULL;
-    // what the translator may read: up to the constants (translate_program's cmax), or 64 KB without them
-    uint64_t len = const_offset ? const_offset : 0x10000;
+    // what the translator may read: up to the constants (translate_program's cmax), or 64 KB without them; [XC3] and the
+    // constants after them (BRX jump tables are read from them at translation: translate.c resolve_brx)
+    uint64_t len = const_offset ? (uint64_t)const_offset + (const_size <= 0x10000 ? const_size : 0) : 0x10000;
     if (code >= HEAP_BASE && code < HEAP_BASE + kernel_heap_size() && code + len > HEAP_BASE + kernel_heap_size())
         len = HEAP_BASE + kernel_heap_size() - code;
     if (len < 0x80 || len > (4u << 20)) return NULL;
@@ -779,7 +780,7 @@ static void set_shaders(Cpu *c, int stride) {
             const uint64_t *w = (const uint64_t *)(uintptr_t)code;
             for (uint64_t k = 0; k < end / 8; k++) h = (h ^ w[k]) * 0x100000001b3ull;
             p->stages[stage].code_hash = h;
-            p->stages[stage].code_copy = code_snapshot(code, p->stages[stage].const_offset);
+            p->stages[stage].code_copy = code_snapshot(code, p->stages[stage].const_offset, p->stages[stage].const_size);
         }
         p->stage_mask |= 1u << stage;
         if (getenv("XCDE_DUMP_CONTROL")) {  // [XCDE] debugging: build/ctrl/<stage>_<code>.bin = the first 0x1000 bytes of the control section

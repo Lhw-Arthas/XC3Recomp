@@ -1780,6 +1780,7 @@ static void clear(int index, int kind, const void *color, uint32_t mask, bool de
 typedef struct {
     ShaderInfo *vi, *fi;
     uint64_t code[2], cmax[2];  // translation inputs (copied: translated on the translator thread)
+    uint64_t csize[2], gcsize;  // [XC3] the compiler constants' size (at src + cmax: BRX jump tables)
     uint64_t src[2], gsrc;      // [XCDE] T240: where the translator reads them (objects.c code_snapshot; code[] = the game's address, for logs)
     ShaderKey vkey, fkey;
     VkShaderModule vs, fs;
@@ -1896,10 +1897,10 @@ static void translate_program(void *arg) {
     static int trace_tr = -1;  // [XCDE] XCDE_TRACE_TRANSLATE=1: start / end of every translation (finds a translation that never ends)
     if (trace_tr < 0) trace_tr = getenv("XCDE_TRACE_TRANSLATE") != NULL;
     if (trace_tr) LOG("[xlat] begin vs=%llx fs=%llx""%c", (unsigned long long)p->code[0], (unsigned long long)p->code[1], 10);
-    p->vi = maxwell_translate((const uint8_t *)(uintptr_t)p->src[0], p->cmax[0], STAGE_VERTEX, &p->vkey);
+    p->vi = maxwell_translate((const uint8_t *)(uintptr_t)p->src[0], p->cmax[0], p->csize[0], STAGE_VERTEX, &p->vkey);
     if (p->vi->msl && p->gcode) {  // [XCDE] geometry stage: fed by the vertex outputs, feeds the fragment inputs
         p->gkey.vs_out_mask = p->vi->out_mask;
-        p->gi = maxwell_translate((const uint8_t *)(uintptr_t)p->gsrc, p->gcmax, STAGE_GEOMETRY, &p->gkey);
+        p->gi = maxwell_translate((const uint8_t *)(uintptr_t)p->gsrc, p->gcmax, p->gcsize, STAGE_GEOMETRY, &p->gkey);
         if (!p->gi->msl) LOG("[shader] GS translate failed: %s (code %llx)\n", p->gi->error, (unsigned long long)p->gcode);
     }
     if (p->vi->msl && (!p->gcode || p->gi->msl) && p->no_fs) {  // [XCDE] depth-only: an empty fragment shader
@@ -1908,7 +1909,7 @@ static void translate_program(void *arg) {
         p->fi->msl = strdup("#version 460\nvoid main() {}\n");
     } else if (p->vi->msl && (!p->gcode || p->gi->msl)) {
         p->fkey.vs_out_mask = p->gi ? p->gi->out_mask : p->vi->out_mask;
-        p->fi = maxwell_translate((const uint8_t *)(uintptr_t)p->src[1], p->cmax[1], STAGE_FRAGMENT, &p->fkey);
+        p->fi = maxwell_translate((const uint8_t *)(uintptr_t)p->src[1], p->cmax[1], p->csize[1], STAGE_FRAGMENT, &p->fkey);
     }
     if (trace_tr) LOG("[xlat] end   vs=%llx fs=%llx""%c", (unsigned long long)p->code[0], (unsigned long long)p->code[1], 10);
     pthread_mutex_unlock(&translate_lock);
@@ -2069,6 +2070,7 @@ static Prog *get_program_(NvnProgram *np, ShaderKey *vkey, ShaderKey *fkey) {
         p->code[i] = np->stages[i].code_addr;
         p->src[i] = nvn_stage_code(&np->stages[i]);
         p->cmax[i] = np->stages[i].const_offset ? np->stages[i].const_offset : 0x10000;
+        p->csize[i] = np->stages[i].const_offset ? np->stages[i].const_size : 0;
     }
     p->vkey = has_gs ? vk2 : *vkey;
     p->fkey = *fkey;
@@ -2078,6 +2080,7 @@ static Prog *get_program_(NvnProgram *np, ShaderKey *vkey, ShaderKey *fkey) {
         p->gcode = np->stages[2].code_addr;
         p->gsrc = nvn_stage_code(&np->stages[2]);
         p->gcmax = np->stages[2].const_offset ? np->stages[2].const_offset : 0x10000;
+        p->gcsize = np->stages[2].const_offset ? np->stages[2].const_size : 0;
     }
     p->t_new = SDL_GetTicksNS();
     p->prewarmed = g_prewarming;
@@ -3288,6 +3291,7 @@ int vk_precompile_program(const NvnProgram *np, const ShaderKey *vkey, const Sha
         p->code[i] = np->stages[i].code_addr;
         p->src[i] = nvn_stage_code(&np->stages[i]);
         p->cmax[i] = np->stages[i].const_offset ? np->stages[i].const_offset : 0x10000;
+        p->csize[i] = np->stages[i].const_offset ? np->stages[i].const_size : 0;
     }
     p->vkey = *vkey;
     p->fkey = *fkey;
@@ -3333,6 +3337,7 @@ int vk_precompile_variant(const NvnProgram *np, const void *rec, size_t rec_size
         p->code[i] = np->stages[i].code_addr;
         p->src[i] = nvn_stage_code(&np->stages[i]);
         p->cmax[i] = np->stages[i].const_offset ? np->stages[i].const_offset : 0x10000;
+        p->csize[i] = np->stages[i].const_offset ? np->stages[i].const_size : 0;
     }
     p->vkey = v.vkey;
     p->fkey = v.fkey;
@@ -4763,7 +4768,8 @@ static CsProg *compute_program(NvnProgram *np) {
     ShaderKey k = {0};
     k.glsl = 1;
     xlat_lock();
-    cp->si = maxwell_translate((const uint8_t *)(uintptr_t)nvn_stage_code(ss), ss->const_offset ? ss->const_offset : 0x10000, STAGE_COMPUTE, &k);
+    cp->si = maxwell_translate((const uint8_t *)(uintptr_t)nvn_stage_code(ss), ss->const_offset ? ss->const_offset : 0x10000,
+                                ss->const_offset ? ss->const_size : 0, STAGE_COMPUTE, &k);
     pthread_mutex_unlock(&translate_lock);
     cp->p.vi = cp->si;
     if (!cp->si->msl) {
