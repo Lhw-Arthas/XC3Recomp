@@ -32,6 +32,7 @@ typedef struct NvnTexture {
     void *backend;  // renderer-side texture
     uint64_t debug_id;
     char label[64];
+    uint8_t cpu_written;  // [XC3] nvnTextureWriteTexels* wrote it: the renderer checks it every frame (textures.c)
 } NvnTexture;
 
 typedef struct {

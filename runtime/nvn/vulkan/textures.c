@@ -840,14 +840,14 @@ static void upload_texture_(NvnTexture *t, TexBackend *b) {
     if (b->uploaded && b->checked_frame == frame) return;
     static int exact = -1;  // XCDE_TEX_EXACT=1: every texture every frame, full hash (T122 experiments)
     if (exact < 0) exact = getenv("XCDE_TEX_EXACT") != NULL;
-    if (!exact && b->uploaded && !b->dynamic && ((frame + ((uintptr_t)b >> 6)) & 7)) return;
+    if (!exact && b->uploaded && !b->dynamic && !t->cpu_written && ((frame + ((uintptr_t)b >> 6)) & 7)) return;
     const FormatInfo *fi = t->layout.fmt;
     if (!fi || !fi->bpb) return;
     VkFmt mf = fmt_of(t->format);
     uint64_t total = tegra_total_size(&t->layout);
     b->checked_frame = frame;
     prof_tex_checks++;
-    if (t->flags & 0x10) b->dynamic = true;
+    if ((t->flags & 0x10) || t->cpu_written) b->dynamic = true;  // ([XC3] cpu_written: nvnTextureWriteTexels*, objects.c)
     if (full_hash_budget_frame != frame) { full_hash_budget_frame = frame; full_hash_budget = 4 << 20; }
     const uint8_t *mem = (const uint8_t *)(uintptr_t)t->addr;
     static int always_full = -1;
