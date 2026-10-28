@@ -3852,6 +3852,15 @@ static void resolve_feedback(Prog *pr) {
         }
 }
 
+// CMD_FENCE_SYNC: FenceSync(cmd, sync, condition, flags) is recorded from x1, so the sync is x[0] and the condition x[1].
+// [XC3] XC3 records condition 1 (the sync read as address 1 crashed it); XCDE keeps its old reading of x[1], where its
+// condition 0 meant no sync was ever marked from a command list.
+#ifdef GAME_XCDE
+#define FENCE_SYNC_ARG 1
+#else
+#define FENCE_SYNC_ARG 0
+#endif
+
 // ================================================================== resource binding
 static VkDescriptorBufferInfo ubo_span(VkSpan s, uint64_t size) {
     uint64_t max = g_vk.props.limits.maxUniformBufferRange;
@@ -6906,7 +6915,7 @@ static void exec_list(uint64_t handle, int depth) {
             if (fence_flush < 0) fence_flush = getenv("LARECOMP_FENCE_FLUSH") ? 1 : 0;
             if (fence_flush) renderer_flush();
             extern void nvn_sync_set_seq(uint64_t guest, uint64_t seq);
-            if (r->x[1]) nvn_sync_set_seq(r->x[1], renderer_fence_seq());
+            if (r->x[FENCE_SYNC_ARG]) nvn_sync_set_seq(r->x[FENCE_SYNC_ARG], renderer_fence_seq());
             break;
         }
         case CMD_REPORT_COUNTER: {
@@ -7155,7 +7164,7 @@ static void scan_fences(uint64_t handle, uint64_t ticket, int depth) {
             for (uint64_t i = 0; i < r->x[0] && depth < 8; i++) scan_fences(h[i], ticket, depth + 1);
             break;
         }
-        case CMD_FENCE_SYNC: if (r->x[1]) nvn_sync_mark(r->x[1], ticket); break;
+        case CMD_FENCE_SYNC: if (r->x[FENCE_SYNC_ARG]) nvn_sync_mark(r->x[FENCE_SYNC_ARG], ticket); break;
         default: break;
         }
         p += r->size;
