@@ -1887,10 +1887,17 @@ static void compile_program(void *arg) {
     atomic_store(&p->state, p->vs && p->fs && (!p->gi || p->gs) ? 1 : 2);
 }
 
+// [XC3] Shader global memory in the alias region goes through the physical memory pool's page table (pmem_info).
+static void pmem_translate_on(void) {
+    maxwell_pmem_base = g_pmem_reserved ? ALIAS_BASE : 0;
+    maxwell_pmem_size = g_pmem_reserved ? ALIAS_SIZE : 0;
+}
+
 static void translate_program(void *arg) {
     Prog *p = arg;
     maxwell_gmem_base = HEAP_BASE;
     maxwell_gmem_size = HEAP_MAX;
+    pmem_translate_on();
     p->t_x0 = SDL_GetTicksNS();
     xlat_lock();
     p->t_xl = SDL_GetTicksNS();
@@ -3949,16 +3956,17 @@ void vk_gmem_check(uint64_t frame) {
         (unsigned long long)pages, (unsigned long long)first);
 }
 
-static bool gmem_import(uint64_t size) {
+// Host memory at ptr (4 KB aligned, committed) as a storage buffer (VK_EXT_external_memory_host); false: not importable.
+static bool host_import(const void *ptr, uint64_t size, VkBuffer *out_buf, VkDeviceMemory *out_mem) {
     PFN_vkGetMemoryHostPointerPropertiesEXT props =
         (PFN_vkGetMemoryHostPointerPropertiesEXT)vkGetDeviceProcAddr(g_vk.dev, "vkGetMemoryHostPointerPropertiesEXT");
     VkMemoryHostPointerPropertiesEXT mp = {.sType = VK_STRUCTURE_TYPE_MEMORY_HOST_POINTER_PROPERTIES_EXT};
-    if (!props || props(g_vk.dev, VK_EXTERNAL_MEMORY_HANDLE_TYPE_HOST_ALLOCATION_BIT_EXT, (void *)(uintptr_t)HEAP_BASE, &mp) != VK_SUCCESS ||
+    if (!props || props(g_vk.dev, VK_EXTERNAL_MEMORY_HANDLE_TYPE_HOST_ALLOCATION_BIT_EXT, ptr, &mp) != VK_SUCCESS ||
         !mp.memoryTypeBits)
         return false;
     VkImportMemoryHostPointerInfoEXT imp = {.sType = VK_STRUCTURE_TYPE_IMPORT_MEMORY_HOST_POINTER_INFO_EXT,
                                             .handleType = VK_EXTERNAL_MEMORY_HANDLE_TYPE_HOST_ALLOCATION_BIT_EXT,
-                                            .pHostPointer = (void *)(uintptr_t)HEAP_BASE};
+                                            .pHostPointer = (void *)ptr};
     VkMemoryAllocateInfo ai = {.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO, .pNext = &imp, .allocationSize = size,
                                .memoryTypeIndex = (uint32_t)__builtin_ctz(mp.memoryTypeBits)};
     VkDeviceMemory mem;
@@ -3971,6 +3979,15 @@ static bool gmem_import(uint64_t size) {
     VkBuffer buf;
     if (vkCreateBuffer(g_vk.dev, &bi, NULL, &buf) != VK_SUCCESS) { vkFreeMemory(g_vk.dev, mem, NULL); return false; }
     vkBindBufferMemory(g_vk.dev, buf, mem, 0);
+    *out_buf = buf;
+    *out_mem = mem;
+    return true;
+}
+
+static bool gmem_import(uint64_t size) {
+    VkBuffer buf;
+    VkDeviceMemory mem;
+    if (!host_import((void *)(uintptr_t)HEAP_BASE, size, &buf, &mem)) return false;
     if (gmem_buf) {  // the heap grew: the old import may still be in use by submitted work
         vk_wait_seq(submit_seq);
         vkDestroyBuffer(g_vk.dev, gmem_buf, NULL);
@@ -3999,6 +4016,53 @@ static VkDescriptorBufferInfo gmem_info(void) {
     static uint32_t zero[1024];
     VkSpan s = vk_transient_copy(zero, sizeof zero, 256);
     return (VkDescriptorBufferInfo){s.buf, s.off, sizeof zero};
+}
+
+// [XC3] The physical memory pool (kernel.h kernel_pmem) and its page table, imported once like the heap: XC3 keeps its
+// buffers in the alias region (nn::os VammManager pages, MapPhysicalMemory), and shader global memory there
+// (translate.c, maxwell_pmem_base) looks the page up in the table and uses the pool. Without the import (or before the
+// first MapPhysicalMemory) the table bound is all zero: those accesses read zero, as before.
+#define PTAB_BYTES (ALIAS_SIZE / PLAT_PMEM_PAGE * 4)
+static VkBuffer pmem_buf, ptab_buf, pzero_buf;
+static VkDeviceMemory pmem_mem, ptab_mem;
+static VmaAllocation pzero_mem;
+static uint64_t pmem_bytes;
+
+static void pmem_import(void) {
+    static int done;
+    if (done || !g_vk.host_import) return;
+    uint64_t size;
+    const uint32_t *ptab;
+    void *view = kernel_pmem(&size, &ptab);
+    if (!view) return;
+    done = 1;
+    if (host_import(view, size, &pmem_buf, &pmem_mem) && host_import(ptab, PTAB_BYTES, &ptab_buf, &ptab_mem)) {
+        pmem_bytes = size;
+        LOG("[vk] physical memory pool imported for shader global memory: %llu MB\n", (unsigned long long)(size >> 20));
+        return;
+    }
+    LOG("[vk] physical memory pool import failed (%llu MB): shader global memory there reads zero\n", (unsigned long long)(size >> 20));
+    if (pmem_buf) { vkDestroyBuffer(g_vk.dev, pmem_buf, NULL); vkFreeMemory(g_vk.dev, pmem_mem, NULL); pmem_buf = VK_NULL_HANDLE; }
+}
+
+static VkDescriptorBufferInfo pmem_info(void) {
+    pmem_import();
+    return ptab_buf ? (VkDescriptorBufferInfo){pmem_buf, 0, pmem_bytes} : gmem_info();  // (unused while the table is zero)
+}
+
+static VkDescriptorBufferInfo ptab_info(void) {
+    pmem_import();
+    if (ptab_buf) return (VkDescriptorBufferInfo){ptab_buf, 0, PTAB_BYTES};
+    if (!pzero_buf) {
+        VkBufferCreateInfo bi = {.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO, .size = PTAB_BYTES, .usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT};
+        VmaAllocationCreateInfo ai = {.usage = VMA_MEMORY_USAGE_AUTO,
+                                      .flags = VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT | VMA_ALLOCATION_CREATE_MAPPED_BIT};
+        VmaAllocationInfo info;
+        VK_CHECK(vmaCreateBuffer(g_vk.vma, &bi, &ai, &pzero_buf, &pzero_mem, &info));
+        memset(info.pMappedData, 0, PTAB_BYTES);
+        vmaFlushAllocation(g_vk.vma, pzero_mem, 0, PTAB_BYTES);
+    }
+    return (VkDescriptorBufferInfo){pzero_buf, 0, PTAB_BYTES};
 }
 
 // Compute dispatches that use global memory: the imported heap is host memory across PCIe on a discrete GPU, and a
@@ -4693,7 +4757,8 @@ static VkDescriptorSet stage_set(Prog *p, VkDescriptorSetLayout layout, uint32_t
             bi[n] = cbuf_info(stage, si, (int)b->binding, gx, gy, gz);
             w[n].pBufferInfo = &bi[n];
         } else if (b->type == VK_DESCRIPTOR_TYPE_STORAGE_BUFFER) {
-            bi[n] = b->binding == GFAST_BUFFER_INDEX ? gfast_info() : gmem_info();
+            bi[n] = b->binding == GFAST_BUFFER_INDEX ? gfast_info() : b->binding == PMEM_BUFFER_INDEX ? pmem_info()
+                    : b->binding == PTAB_BUFFER_INDEX ? ptab_info() : gmem_info();
             w[n].pBufferInfo = &bi[n];
         } else {
             continue;  // rscale / tint: written below, once the textures (and their scales) are known
@@ -4765,6 +4830,7 @@ static CsProg *compute_program(NvnProgram *np) {
     if (n < 256) { tab[n].addr = ss->code_addr; tab[n].cp = cp; g_cs_n = n + 1; }
     maxwell_gmem_base = HEAP_BASE;
     maxwell_gmem_size = HEAP_MAX;
+    pmem_translate_on();
     ShaderKey k = {0};
     k.glsl = 1;
     xlat_lock();

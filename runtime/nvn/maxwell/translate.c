@@ -23,6 +23,7 @@
 #include "shader.h"
 
 uint64_t maxwell_gmem_base, maxwell_gmem_size;
+uint64_t maxwell_pmem_base, maxwell_pmem_size;  // [XC3] (shader.h)
 const uint8_t *maxwell_dbg_code;
 uint32_t maxwell_dbg_pc;
 int maxwell_dbg_reg;
@@ -77,6 +78,7 @@ typedef struct {
     // GLSL (fields kept last: the MSL path's layout, including its out-of-range reg_used writes, is unchanged)
     bool glsl;               // emit Vulkan GLSL: dialect-specific constructs here, the rest via glsl_rewrite()
     bool uses_gmem_store;    // STG present: the gmem buffer is not readonly
+    bool uses_pmem;          // [XC3] global memory goes through the alias region's page table too (gmem_access)
     uint32_t cbuf_need[18];  // highest constant vec4 index + 1 per cbuf (array size of the GLSL block)
     // [XCDE] geometry stage (GLSL): SPH output topology (1 points, 6 line strip, 7 triangle strip) and vertex count,
     // the vertex index register of the ALD being translated, and the inputs read per vertex
@@ -1197,6 +1199,55 @@ static void emit_tex(Ctx *c, uint64_t w, bool bindless) {
 }
 
 // ------------------------------------------------------------------ instruction translation
+// [XC3] Global memory access (LDG / STG / ATOM, GLSL): opens a block with `ga` (byte offset in the buffer), `ok` (inside it)
+// and, when the alias region is paged (maxwell_pmem_size), `pm` (ga is in the physical memory pool, pmem_, not the
+// heap, gmem_). gw / gst / gat: a word load, a word store, an atomic on word idx of whichever buffer that is.
+static void gmem_access(Ctx *c, const char *addr, bool atom) {
+    if (!c->glsl || !maxwell_pmem_size) {
+        if (atom)
+            sp(&c->body, "    { ulong ga = %s - 0x%llxul; bool ok = ga < 0x%llxul && (ga & 3ul) == 0ul;\n", addr,
+               (unsigned long long)maxwell_gmem_base, (unsigned long long)maxwell_gmem_size);
+        else
+            sp(&c->body, "    { ulong ga = %s - 0x%llxul; bool ok = ga < 0x%llxul;\n", addr,
+               (unsigned long long)maxwell_gmem_base, (unsigned long long)maxwell_gmem_size);
+        return;
+    }
+    c->uses_pmem = true;
+    sp(&c->body, "    { ulong ad = %s; ulong ga = ad - 0x%llxul; bool ok = ga < 0x%llxul; bool pm = false;\n", addr,
+       (unsigned long long)maxwell_gmem_base, (unsigned long long)maxwell_gmem_size);
+    sp(&c->body, "      if (!ok && ad - 0x%llxul < 0x%llxul) { uint pe = ptab_.w[uint((ad - 0x%llxul) >> 16)];\n"
+                 "        if (pe != 0u) { ga = (ulong(pe - 1u) << 16) | (ad & 0xFFFFul); ok = true; pm = true; } }\n",
+       (unsigned long long)maxwell_pmem_base, (unsigned long long)maxwell_pmem_size, (unsigned long long)maxwell_pmem_base);
+    if (atom) sp(&c->body, "      ok = ok && (ga & 3ul) == 0ul;\n");
+}
+
+static const char *gw(Ctx *c, const char *idx) {
+    static _Thread_local char buf[8][256];
+    static _Thread_local int k;
+    char *o = buf[k++ & 7];
+    if (c->uses_pmem) snprintf(o, 256, "(pm ? pmem_.w[%s] : gmem_.w[%s])", idx, idx);
+    else snprintf(o, 256, "gmem_.w[%s]", idx);
+    return o;
+}
+
+static const char *gst(Ctx *c, const char *idx, const char *v) {
+    static _Thread_local char buf[4][320];
+    static _Thread_local int k;
+    char *o = buf[k++ & 3];
+    if (c->uses_pmem) snprintf(o, 320, "{ if (pm) pmem_.w[%s] = %s; else gmem_.w[%s] = %s; }", idx, v, idx, v);
+    else snprintf(o, 320, "gmem_.w[%s] = %s;", idx, v);
+    return o;
+}
+
+static const char *gat(Ctx *c, const char *fn, const char *idx, const char *v) {
+    static _Thread_local char buf[4][320];
+    static _Thread_local int k;
+    char *o = buf[k++ & 3];
+    if (c->uses_pmem) snprintf(o, 320, "(pm ? %s(pmem_.w[%s], %s) : %s(gmem_.w[%s], %s))", fn, idx, v, fn, idx, v);
+    else snprintf(o, 320, "%s(gmem_.w[%s], %s)", fn, idx, v);
+    return o;
+}
+
 static void emit_insn(Ctx *c, uint64_t w, uint32_t pc) {
     char t[2048], u[2048];
     int d = (int)bits(w, 0, 8), a = (int)bits(w, 8, 8);
@@ -1887,9 +1938,8 @@ static void emit_insn(Ctx *c, uint64_t w, uint32_t pc) {
             if (a == RZ) sprintf(addr, "ulong(%lld)", (long long)off);
             else if (wide) sprintf(addr, "((ulong(%s) << 32 | ulong(%s)) + ulong(%lld))", R(a + 1), R(a), (long long)off);
             else sprintf(addr, "(ulong(%s) + ulong(%lld))", R(a), (long long)off);
-            sp(&c->body, "    { ulong ga = %s - 0x%llxul; bool ok = ga < 0x%llxul && (ga & 3ul) == 0ul;\n", addr,
-               (unsigned long long)maxwell_gmem_base, (unsigned long long)maxwell_gmem_size);
-            sp(&c->body, "      uint av = ok ? %s(gmem_.w[uint(ga >> 2)], %s) : 0u;\n", fn[op], R(b));
+            gmem_access(c, addr, true);
+            sp(&c->body, "      uint av = ok ? %s : 0u;\n", gat(c, fn[op], "uint(ga >> 2)", R(b)));
             if (d != RZ) { c->reg_used[d] = 1; sp(&c->body, "      r%d = av;\n", d); }
             sp(&c->body, "    }\n");
         }
@@ -1903,8 +1953,7 @@ static void emit_insn(Ctx *c, uint64_t w, uint32_t pc) {
         if (a == RZ) sprintf(addr, "ulong(%lld)", (long long)off);
         else if (wide) sprintf(addr, "((ulong(%s) << 32 | ulong(%s)) + ulong(%lld))", R(a + 1), R(a), (long long)off);
         else sprintf(addr, "(ulong(%s) + ulong(%lld))", R(a), (long long)off);
-        sp(&c->body, "    { ulong ga = %s - 0x%llxul; bool ok = ga < 0x%llxul;\n", addr,
-           (unsigned long long)maxwell_gmem_base, (unsigned long long)maxwell_gmem_size);
+        gmem_access(c, addr, false);
         static const char *const ld_small[] = {"uint(gmem[ga])", "uint(int(char(gmem[ga])))",
                                                "uint(*(device ushort *)(gmem + ga))", "uint(int(*(device short *)(gmem + ga)))"};
         int nw = size == 5 ? 2 : size >= 6 ? 4 : 1;
@@ -1918,13 +1967,14 @@ static void emit_insn(Ctx *c, uint64_t w, uint32_t pc) {
             static const char *const gl_small[] = {
                 "(%s >> (uint(ga & 3ul) * 8u)) & 0xFFu", "uint(sx8(%s >> (uint(ga & 3ul) * 8u)))",
                 "(%s >> (uint(ga & 2ul) * 8u)) & 0xFFFFu", "uint(sx16(%s >> (uint(ga & 2ul) * 8u)))"};
-            sp(&c->body, "      uint fw = ok ? gfind(uint(ga)) : 0xFFFFFFFFu;\n");
+            sp(&c->body, c->uses_pmem ? "      uint fw = ok && !pm ? gfind(uint(ga)) : 0xFFFFFFFFu;\n"
+                                      : "      uint fw = ok ? gfind(uint(ga)) : 0xFFFFFFFFu;\n");
             if (!store) {
                 if (size < 4) {
                     if (d != RZ) {
-                        char fast[160], slow[160];
+                        char fast[160], slow[384];
                         snprintf(fast, sizeof fast, gl_small[size], "gfast_.w[fw]");
-                        snprintf(slow, sizeof slow, gl_small[size], "gmem_.w[uint(ga >> 2)]");
+                        snprintf(slow, sizeof slow, gl_small[size], gw(c, "uint(ga >> 2)"));
                         c->reg_used[d] = 1;
                         sp(&c->body, "      r%d = fw != 0xFFFFFFFFu ? %s : ok ? %s : 0u;\n", d, fast, slow);
                     }
@@ -1932,8 +1982,9 @@ static void emit_insn(Ctx *c, uint64_t w, uint32_t pc) {
                     for (int k = 0; k < nw; k++)
                         if (d != RZ && d + k < RZ) {
                             c->reg_used[d + k] = 1;
-                            sp(&c->body, "      r%d = fw != 0xFFFFFFFFu ? gfast_.w[fw + %du] : ok ? gmem_.w[uint(ga >> 2) + %du] : 0u;\n",
-                               d + k, k, k);
+                            char wi[64];
+                            snprintf(wi, sizeof wi, "uint(ga >> 2) + %du", k);
+                            sp(&c->body, "      r%d = fw != 0xFFFFFFFFu ? gfast_.w[fw + %du] : ok ? %s : 0u;\n", d + k, k, gw(c, wi));
                         }
                 }
             } else {
@@ -1944,39 +1995,57 @@ static void emit_insn(Ctx *c, uint64_t w, uint32_t pc) {
                     const char *bm = size < 2 ? "3ul" : "2ul";
                     sp(&c->body, "      if (ok) { uint sh = uint(ga & %s) * 8u; uint v = (%s & 0x%xu) << sh;\n", bm, R(d), m);
                     sp(&c->body, "        if (fw != 0xFFFFFFFFu) { atomicAnd(gfast_.w[fw], ~(0x%xu << sh)); atomicOr(gfast_.w[fw], v); }\n", m);
-                    sp(&c->body, "        else { atomicAnd(gmem_.w[uint(ga >> 2)], ~(0x%xu << sh)); atomicOr(gmem_.w[uint(ga >> 2)], v); } }\n", m);
+                    char mk[64];
+                    snprintf(mk, sizeof mk, "~(0x%xu << sh)", m);
+                    sp(&c->body, "        else { %s; %s; } }\n", gat(c, "atomicAnd", "uint(ga >> 2)", mk), gat(c, "atomicOr", "uint(ga >> 2)", "v"));
                 } else {
-                    for (int k = 0; k < nw; k++)
-                        sp(&c->body, "      if (fw != 0xFFFFFFFFu) gfast_.w[fw + %du] = %s; else if (ok) gmem_.w[uint(ga >> 2) + %du] = %s;\n", k,
-                           R(d == RZ ? RZ : d + k), k, R(d == RZ ? RZ : d + k));
+                    for (int k = 0; k < nw; k++) {
+                        char wi[64];
+                        snprintf(wi, sizeof wi, "uint(ga >> 2) + %du", k);
+                        sp(&c->body, "      if (fw != 0xFFFFFFFFu) gfast_.w[fw + %du] = %s; else if (ok) %s\n", k,
+                           R(d == RZ ? RZ : d + k), gst(c, wi, R(d == RZ ? RZ : d + k)));
+                    }
                 }
             }
         } else if (c->glsl) {  // gmem_.w[]: 32-bit words; sub-word accesses within the containing word
             static const char *const gl_small[] = {
-                "(gmem_.w[uint(ga >> 2)] >> (uint(ga & 3ul) * 8u)) & 0xFFu",
-                "uint(sx8(gmem_.w[uint(ga >> 2)] >> (uint(ga & 3ul) * 8u)))",
-                "(gmem_.w[uint(ga >> 2)] >> (uint(ga & 2ul) * 8u)) & 0xFFFFu",
-                "uint(sx16(gmem_.w[uint(ga >> 2)] >> (uint(ga & 2ul) * 8u)))"};
+                "(%s >> (uint(ga & 3ul) * 8u)) & 0xFFu",
+                "uint(sx8(%s >> (uint(ga & 3ul) * 8u)))",
+                "(%s >> (uint(ga & 2ul) * 8u)) & 0xFFFFu",
+                "uint(sx16(%s >> (uint(ga & 2ul) * 8u)))"};
             if (!store) {
                 if (size < 4) {
-                    if (d != RZ) { c->reg_used[d] = 1; sp(&c->body, "      if (ok) r%d = %s; else r%d = 0u;\n", d, gl_small[size], d); }
+                    if (d != RZ) {
+                        char ld[384];
+                        snprintf(ld, sizeof ld, gl_small[size], gw(c, "uint(ga >> 2)"));
+                        c->reg_used[d] = 1;
+                        sp(&c->body, "      if (ok) r%d = %s; else r%d = 0u;\n", d, ld, d);
+                    }
                 } else {
                     for (int k = 0; k < nw; k++)
                         if (d != RZ && d + k < RZ) {
+                            char wi[64];
+                            snprintf(wi, sizeof wi, "uint(ga >> 2) + %du", k);
                             c->reg_used[d + k] = 1;
-                            sp(&c->body, "      if (ok) r%d = gmem_.w[uint(ga >> 2) + %du]; else r%d = 0u;\n", d + k, k, d + k);
+                            sp(&c->body, "      if (ok) r%d = %s; else r%d = 0u;\n", d + k, gw(c, wi), d + k);
                         }
                 }
             } else {
                 c->uses_gmem_store = true;
                 c->info->uses_gmem_store = true;  // [XCDE] T134: the executor orders later draws after this one
-                if (size < 4)
-                    sp(&c->body, "      if (ok) { uint wi = uint(ga >> 2); uint sh = uint(ga & %s) * 8u; atomicAnd(gmem_.w[wi], ~(0x%xu << sh)); "
-                       "atomicOr(gmem_.w[wi], (%s & 0x%xu) << sh); }\n", size < 2 ? "3ul" : "2ul", size < 2 ? 0xFFu : 0xFFFFu, R(d),
-                       size < 2 ? 0xFFu : 0xFFFFu);
-                else
-                    for (int k = 0; k < nw; k++)
-                        sp(&c->body, "      if (ok) gmem_.w[uint(ga >> 2) + %du] = %s;\n", k, R(d == RZ ? RZ : d + k));
+                if (size < 4) {
+                    uint32_t m = size < 2 ? 0xFFu : 0xFFFFu;
+                    char mk[64], v[96];
+                    snprintf(mk, sizeof mk, "~(0x%xu << sh)", m);
+                    snprintf(v, sizeof v, "(%s & 0x%xu) << sh", R(d), m);
+                    sp(&c->body, "      if (ok) { uint wi = uint(ga >> 2); uint sh = uint(ga & %s) * 8u; %s; %s; }\n", size < 2 ? "3ul" : "2ul",
+                       gat(c, "atomicAnd", "wi", mk), gat(c, "atomicOr", "wi", v));
+                } else
+                    for (int k = 0; k < nw; k++) {
+                        char wi[64];
+                        snprintf(wi, sizeof wi, "uint(ga >> 2) + %du", k);
+                        sp(&c->body, "      if (ok) %s\n", gst(c, wi, R(d == RZ ? RZ : d + k)));
+                    }
             }
         } else if (!store) {
             if (size < 4) {
@@ -2332,6 +2401,11 @@ static ShaderInfo *glsl_finish(Ctx *c, bool any_branch, bool dbg) {
     if (info->uses_gmem)
         sp(&s, "layout(std430, set = %d, binding = %d) %sbuffer GMem { uint w[]; } gmem_;\n", set, GMEM_BUFFER_INDEX,
            c->uses_gmem_store ? "" : "readonly ");
+    if (c->uses_pmem) {  // [XC3]
+        sp(&s, "layout(std430, set = %d, binding = %d) %sbuffer PMem { uint w[]; } pmem_;\n", set, PMEM_BUFFER_INDEX,
+           c->uses_gmem_store ? "" : "readonly ");
+        sp(&s, "layout(std430, set = %d, binding = %d) readonly buffer PTab { uint w[]; } ptab_;\n", set, PTAB_BUFFER_INDEX);
+    }
     if (xfb) sp(&s, "layout(std140, set = 0, binding = %d) uniform XfbP { uvec4 xfbp[2]; };\n", XFB_PARAM_INDEX);
     if (info->uses_gmem_map) {  // (compute) the dispatch's storage buffers, device-local: gmap[i] = heap offset, size, word
         sp(&s, "layout(std140, set = %d, binding = %d) uniform GMap { uvec4 gmap[%d]; };\n", set, GMAP_BUFFER_INDEX, GMAP_MAX + 1);

@@ -105,6 +105,12 @@ typedef struct {
 #define GMAP_MAX 16  // ranges in the table (GMap { uvec4 gmap[GMAP_MAX + 1]; }: [i] = addr lo, addr hi, size, word offset;
                      // [GMAP_MAX].x = count)
 extern uint64_t maxwell_gmem_base, maxwell_gmem_size;
+// [XC3] (GLSL) Global memory in [maxwell_pmem_base, + maxwell_pmem_size), the alias region, is paged: the page table
+// `buffer PTab { uint w[]; } ptab_` (one word per 64 KB page: 0 unmapped, else pool page + 1) and the pool
+// `buffer PMem { uint w[]; } pmem_` (exec.c pmem_info, kernel.c pmem_map). maxwell_pmem_size 0: off (output unchanged).
+#define PMEM_BUFFER_INDEX 23
+#define PTAB_BUFFER_INDEX 24
+extern uint64_t maxwell_pmem_base, maxwell_pmem_size;
 // Debug: when translating the shader whose code starts at maxwell_dbg_code, output register
 // maxwell_dbg_reg as captured after the instruction at maxwell_dbg_pc (greyscale, all targets).
 extern const uint8_t *maxwell_dbg_code;

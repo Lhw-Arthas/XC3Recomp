@@ -177,6 +177,79 @@ static uint64_t user_page_get(void) {
 }
 #endif
 void kernel_set_system_resource_size(uint64_t size) { sys_resource_size = size; }
+
+bool g_pmem_reserved;  // [XC3] (kernel.h)
+#ifndef GAME_XCDE
+// [XC3] Physical memory pool (kernel.h, platform.h): MapPhysicalMemory takes 64 KB pool pages for the 64 KB pages of
+// the alias region it covers; a page is counted in 4 KB units (XC3 maps one 4 KB page at the region's start, the
+// rest in multiples of 64 KB) and goes back to the pool when none is left mapped.
+#define PMEM_BUDGET 0xCD500000ull  // the application's physical memory, shared with the heap (GetInfo 6)
+#define PMEM_PAGES (ALIAS_SIZE / PLAT_PMEM_PAGE)
+static pthread_mutex_t pmem_lock = PTHREAD_MUTEX_INITIALIZER;
+static uint8_t *pmem_view;
+static uint64_t pmem_size, pmem_next;  // pool bytes; pool pages handed out so far (then from pmem_free)
+static uint32_t *pmem_ptab, *pmem_free, pmem_nfree;
+static uint8_t *pmem_refs;             // 4 KB pages mapped in each 64 KB page of the alias region
+
+void *kernel_pmem(uint64_t *size, const uint32_t **ptab) {
+    *size = pmem_size;
+    *ptab = pmem_ptab;
+    return pmem_view;
+}
+
+static bool pmem_init(void) {
+    if (pmem_view) return true;
+    // The budget less the heap (the GPU import pins all of it), and a page per unaligned map at most on top.
+    uint64_t size = ((PMEM_BUDGET - heap_size + PLAT_PMEM_PAGE - 1) & ~(PLAT_PMEM_PAGE - 1)) + 16 * PLAT_PMEM_PAGE;
+    uint8_t *view = plat_pmem_create(size);
+    if (!view) { LOG("[kernel] physical memory pool (%llu MB) not created\n", (unsigned long long)(size >> 20)); return false; }
+    uint64_t t = (uint64_t)(uintptr_t)hle_alloc(PMEM_PAGES * 4 + 0xFFF);  // (4 KB aligned: imported by the renderer)
+    pmem_ptab = (uint32_t *)(uintptr_t)((t + 0xFFF) & ~0xFFFull);
+    pmem_refs = calloc(PMEM_PAGES, 1);
+    pmem_free = calloc(size / PLAT_PMEM_PAGE, 4);
+    pmem_size = size;
+    pmem_view = view;
+    LOG("[kernel] physical memory pool: %llu MB (heap %llu MB)\n", (unsigned long long)(size >> 20), (unsigned long long)(heap_size >> 20));
+    return true;
+}
+
+static uint32_t pmem_map(uint64_t addr, uint64_t size) {
+    uint64_t lo = addr & ~(PLAT_PMEM_PAGE - 1), need = 0;
+    for (uint64_t a = lo; a < addr + size; a += PLAT_PMEM_PAGE) need += !pmem_ptab[(a - ALIAS_BASE) / PLAT_PMEM_PAGE];
+    if (need > pmem_nfree + (pmem_size / PLAT_PMEM_PAGE - pmem_next)) return 0x10801;  // (the heap shrank since)
+    for (uint64_t a = lo; a < addr + size; a += PLAT_PMEM_PAGE) {
+        uint64_t g = (a - ALIAS_BASE) / PLAT_PMEM_PAGE;
+        if (!pmem_ptab[g]) {
+            uint32_t pg = pmem_nfree ? pmem_free[--pmem_nfree] : (uint32_t)pmem_next++;
+            if (!plat_pmem_map(a, (uint64_t)pg * PLAT_PMEM_PAGE)) FATAL("physical memory pool: page %llx not mapped\n", (unsigned long long)a);
+            pmem_ptab[g] = pg + 1;
+        }
+        uint64_t s = a > addr ? a : addr, e = a + PLAT_PMEM_PAGE < addr + size ? a + PLAT_PMEM_PAGE : addr + size;
+        pmem_refs[g] += (uint8_t)((e - s + 0xFFF) >> 12);
+    }
+    return 0;
+}
+
+static void pmem_unmap(uint64_t addr, uint64_t size) {
+    for (uint64_t a = addr & ~(PLAT_PMEM_PAGE - 1); a < addr + size; a += PLAT_PMEM_PAGE) {
+        uint64_t g = (a - ALIAS_BASE) / PLAT_PMEM_PAGE;
+        if (!pmem_ptab[g]) continue;
+        uint64_t s = a > addr ? a : addr, e = a + PLAT_PMEM_PAGE < addr + size ? a + PLAT_PMEM_PAGE : addr + size;
+        uint8_t n = (uint8_t)((e - s + 0xFFF) >> 12);
+        pmem_refs[g] = pmem_refs[g] > n ? pmem_refs[g] - n : 0;
+        if (pmem_refs[g]) continue;
+        plat_pmem_unmap(a);
+        pmem_free[pmem_nfree++] = pmem_ptab[g] - 1;
+        pmem_ptab[g] = 0;
+    }
+}
+
+static bool pmem_covers(uint64_t addr, uint64_t size) {
+    return g_pmem_reserved && addr >= ALIAS_BASE && addr + size <= ALIAS_BASE + ALIAS_SIZE;
+}
+#else
+void *kernel_pmem(uint64_t *size, const uint32_t **ptab) { *size = 0; *ptab = NULL; return NULL; }
+#endif
 // Writable guest data regions (heap, mapped/physical memory, module .data): for debug/runtime memory scans.
 int kernel_data_regions(uint64_t *addr, uint64_t *size, int max) {
     int n = 0;
@@ -191,7 +264,7 @@ static void region_add(uint64_t addr, uint64_t size, uint32_t type, uint32_t per
     if (nregions == MAX_REGIONS) FATAL("too many regions\n");
     if (nregions + 1 == 1024 || nregions + 1 == 4096 || nregions + 1 == 12000)  // (long-session growth shows in the log)
         LOG("[kernel] %d memory regions\n", nregions + 1);
-    plat_commit(addr, size);  // back it before the OS writes there (Windows: file reads into the heap)
+    if (!(type == 0x7 && g_pmem_reserved)) plat_commit(addr, size);  // back it before the OS writes there (Windows: file reads into the heap)
     int i = nregions++;
     while (i > 0 && regions[i - 1].addr > addr) { regions[i] = regions[i - 1]; i--; }
     regions[i] = (Region){addr, size, type, perm};
@@ -1008,6 +1081,14 @@ static void svc_impl(Cpu *c, uint32_t imm, uint64_t pc) {
         // its 60 GB address region until this fails, and with no limit it committed 16 GB and filled the region table.
         // 0x10801 = kernel LimitReached (the SDK's VammManager turns it into a plain allocation failure).
         if (heap_size + phys_mapped + x[1] > 0xCD500000ull) { x[0] = 0x10801; break; }
+#ifndef GAME_XCDE
+        if (pmem_covers(x[0], x[1])) {  // [XC3] pages of the physical memory pool (the GPU sees them: exec.c pmem)
+            pthread_mutex_lock(&pmem_lock);
+            uint32_t r = pmem_init() ? pmem_map(x[0], x[1]) : 0x10801;
+            pthread_mutex_unlock(&pmem_lock);
+            if (r) { x[0] = r; break; }
+        }
+#endif
         region_add(x[0], x[1], 0x7, 3);  // [XC3] (commits the range: before the memset, not after)
         memset((void *)x[0], 0, x[1]);
         phys_mapped += x[1];
@@ -1017,6 +1098,13 @@ static void svc_impl(Cpu *c, uint32_t imm, uint64_t pc) {
         for (int i = 0; i < nregions; i++)  // [XC3] give the pages back to the budget (exact mappings only)
             if (regions[i].addr == x[0] && regions[i].type == 0x7) { phys_mapped -= regions[i].size; break; }
         region_remove(x[0]);
+#ifndef GAME_XCDE
+        if (pmem_covers(x[0], x[1]) && pmem_view) {  // [XC3]
+            pthread_mutex_lock(&pmem_lock);
+            pmem_unmap(x[0], x[1]);
+            pthread_mutex_unlock(&pmem_lock);
+        }
+#endif
         x[0] = R_OK;
         break;
     case 0x34: x[0] = svc_wait_for_address(x[0], (uint32_t)x[1], (int32_t)x[2], (int64_t)x[3]); break;

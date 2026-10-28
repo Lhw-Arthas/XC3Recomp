@@ -27,6 +27,15 @@ bool plat_reset_guest(uint64_t lo, uint64_t hi);
 // MEM_WRITE_WATCH), their addresses into pages[] (at most max), and the tracking reset for the range. Returns the
 // count (max: maybe more), or -1 where there is no tracking (macOS, Linux). Page size: *page.
 int plat_written_pages(uint64_t addr, uint64_t size, uint64_t *pages, int max, uint64_t *page);
+// [XC3] Physical memory pool (svcMapPhysicalMemory): [lo, hi) is claimed as one placeholder, and each mapped 64 KB page of
+// it is a view of one pagefile-backed section. The section's own contiguous view (plat_pmem_create) is what the Vulkan
+// renderer imports as GPU memory, so pages scattered over the 64 GB alias region are one buffer for shaders. Windows
+// only (false / NULL elsewhere: the kernel then backs the pages as before, and the GPU does not see them).
+#define PLAT_PMEM_PAGE 0x10000ull
+bool plat_pmem_reserve(uint64_t lo, uint64_t hi);
+void *plat_pmem_create(uint64_t size);           // the section and its contiguous view (NULL: failed)
+bool plat_pmem_map(uint64_t addr, uint64_t off);  // the page at addr <- the section's page at off
+bool plat_pmem_unmap(uint64_t addr);             // back to a placeholder
 enum { PLAT_PROT_NONE = 0, PLAT_PROT_READ = 1, PLAT_PROT_RW = 3 };
 int plat_protect(uint64_t addr, uint64_t size, int prot);  // 0 on success
 #define PLAT_PAGE 0x4000ull  // largest page size we deal with (macOS 16K; multiple of Windows' 4K)

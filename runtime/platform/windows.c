@@ -84,6 +84,46 @@ void plat_commit(uint64_t addr, uint64_t size) {
                 (unsigned long long)size, GetLastError());
 }
 
+// [XC3] Physical memory pool (platform.h). VirtualAlloc2 / MapViewOfFile3 (Windows 10 1803+) looked up at run time.
+#ifndef MEM_RESERVE_PLACEHOLDER
+#define MEM_RESERVE_PLACEHOLDER 0x00040000
+#define MEM_REPLACE_PLACEHOLDER 0x00004000
+#define MEM_PRESERVE_PLACEHOLDER 0x00000002
+#endif
+typedef PVOID(WINAPI *VirtualAlloc2_t)(HANDLE, PVOID, SIZE_T, ULONG, ULONG, void *, ULONG);
+typedef PVOID(WINAPI *MapViewOfFile3_t)(HANDLE, HANDLE, PVOID, ULONG64, SIZE_T, ULONG, ULONG, void *, ULONG);
+typedef BOOL(WINAPI *UnmapViewOfFile2_t)(HANDLE, PVOID, ULONG);
+static MapViewOfFile3_t map_view3;
+static UnmapViewOfFile2_t unmap_view2;
+static HANDLE pmem_section;
+
+bool plat_pmem_reserve(uint64_t lo, uint64_t hi) {
+    HMODULE kb = GetModuleHandleA("kernelbase.dll");
+    VirtualAlloc2_t va2 = kb ? (VirtualAlloc2_t)(void *)GetProcAddress(kb, "VirtualAlloc2") : NULL;
+    map_view3 = kb ? (MapViewOfFile3_t)(void *)GetProcAddress(kb, "MapViewOfFile3") : NULL;
+    unmap_view2 = kb ? (UnmapViewOfFile2_t)(void *)GetProcAddress(kb, "UnmapViewOfFile2") : NULL;
+    if (!va2 || !map_view3 || !unmap_view2) return false;
+    return va2(NULL, (void *)(uintptr_t)lo, hi - lo, MEM_RESERVE | MEM_RESERVE_PLACEHOLDER, PAGE_NOACCESS, NULL, 0) ==
+           (void *)(uintptr_t)lo;
+}
+
+void *plat_pmem_create(uint64_t size) {
+    pmem_section = CreateFileMappingW(INVALID_HANDLE_VALUE, NULL, PAGE_READWRITE, (DWORD)(size >> 32), (DWORD)size, NULL);
+    if (!pmem_section) return NULL;
+    return MapViewOfFile(pmem_section, FILE_MAP_ALL_ACCESS, 0, 0, size);
+}
+
+bool plat_pmem_map(uint64_t addr, uint64_t off) {
+    // Split the page off its placeholder; it already is one of its own when it was mapped before (that split fails).
+    VirtualFree((void *)(uintptr_t)addr, PLAT_PMEM_PAGE, MEM_RELEASE | MEM_PRESERVE_PLACEHOLDER);
+    return map_view3(pmem_section, NULL, (void *)(uintptr_t)addr, off, PLAT_PMEM_PAGE, MEM_REPLACE_PLACEHOLDER, PAGE_READWRITE,
+                     NULL, 0) == (void *)(uintptr_t)addr;
+}
+
+bool plat_pmem_unmap(uint64_t addr) {
+    return unmap_view2(GetCurrentProcess(), (void *)(uintptr_t)addr, MEM_PRESERVE_PLACEHOLDER) != 0;
+}
+
 int plat_protect(uint64_t addr, uint64_t size, int prot) {
     DWORD p = prot == PLAT_PROT_NONE ? PAGE_NOACCESS : prot == PLAT_PROT_READ ? PAGE_READONLY : PAGE_READWRITE, old;
     if (addr >= g_lo && addr < g_hi) plat_commit(addr, size);

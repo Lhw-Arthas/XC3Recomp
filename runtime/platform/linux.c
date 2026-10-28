@@ -43,6 +43,11 @@ bool plat_reset_guest(uint64_t lo, uint64_t hi) {
 
 void plat_commit(uint64_t addr, uint64_t size) { (void)addr; (void)size; }
 
+bool plat_pmem_reserve(uint64_t lo, uint64_t hi) { (void)lo; (void)hi; return false; }  // [XC3] (Windows only)
+void *plat_pmem_create(uint64_t size) { (void)size; return NULL; }
+bool plat_pmem_map(uint64_t addr, uint64_t off) { (void)addr; (void)off; return false; }
+bool plat_pmem_unmap(uint64_t addr) { (void)addr; return false; }
+
 int plat_written_pages(uint64_t addr, uint64_t size, uint64_t *pages, int max, uint64_t *page) {  // (no write tracking)
     (void)addr; (void)size; (void)pages; (void)max; (void)page;
     return -1;
