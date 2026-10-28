@@ -121,8 +121,10 @@ NVN(nvnCommandBufferBindProgram) {
     // bound, and the game sets other shaders on a program object (or finalizes it and a new one gets its memory) while
     // the render worker still has draws of the old ones to record - those drew with the new shaders (a face with
     // another material's textures / black, Reyn's body as his weapon; more often the further the worker lags behind)
-    const NvnProgram *p = HOST(NvnProgram, s.x[1]);
-    r->x[0] = (uint64_t)(uintptr_t)(p && p->frozen ? p->frozen : p);  // host program
+    // [XC3] (program, stage bits): XC3 also binds one stage at a time (bits 0x1 VS, 0x2 FS, 0x4 GS...) and NULL to
+    // unbind a stage (it crashed here on one). r->x[1] keeps the stage bits; exec.c combines the stages.
+    const NvnProgram *p = s.x[1] ? HOST(NvnProgram, s.x[1]) : NULL;
+    r->x[0] = (uint64_t)(uintptr_t)(p && p->frozen ? p->frozen : p);  // host program (0: unbind those stages)
 }
 NVN(nvnCommandBufferBindBlendState) { record_copy(c, CMD_BIND_BLEND, 1, 8); }
 NVN(nvnCommandBufferBindChannelMaskState) { record_copy(c, CMD_BIND_CHANNEL_MASK, 1, 4); }

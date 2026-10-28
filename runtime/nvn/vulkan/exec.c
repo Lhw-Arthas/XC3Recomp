@@ -5067,7 +5067,7 @@ static uint64_t prof_tp_;
 static void draw_(CmdRec *r, bool indexed) {
     if (prof) prof_tp_ = SDL_GetTicksNS();
     prewarm_drain();  // [XCDE] T163
-    if (!st.program) { SKIPPED(); return; }
+    if (!st.program || !(st.program->stage_mask & 1)) { SKIPPED(); return; }  // ([XC3] no vertex stage bound: bind_program_stages)
     {   // [XCDE] debugging: XCDE_SKIP_PROG=<fragment code addr hex>: drop the draws of that program
         static uint64_t skip = ~0ull;
         if (skip == ~0ull) skip = getenv("XCDE_SKIP_PROG") ? strtoull(getenv("XCDE_SKIP_PROG"), NULL, 16) : 0;
@@ -6569,6 +6569,33 @@ static void split_submit(void) {
     renderer_submit();
 }
 
+// [XC3] nvnCommandBufferBindProgram(program, stage bits) binds only those stages (bit i = stage i: 0x1 VS, 0x2 FS,
+// 0x4 GS, ... 0x20 CS), and a NULL program unbinds them. XC3 binds a VS-only, an FS-only and a GS-only program one after
+// the other and unbinds its GS with NULL; replacing the whole program each time dropped stages (and the NULL crashed).
+// The bound stages are combined into one program, frozen and shared like a registered one (objects.c), so the program
+// cache (keyed by content) sees the same program as a whole one with those shaders. All graphics stages at once: the
+// program itself, as before (XCDE binds this way).
+static NvnProgram *bind_program_stages(NvnProgram *p, uint32_t bits) {
+    if (p && (bits & 0x1f) == 0x1f) return p;
+    NvnProgram q;
+    memset(&q, 0, sizeof q);
+    if (st.program) { memcpy(q.stages, st.program->stages, sizeof q.stages); q.stage_mask = st.program->stage_mask; }
+    for (int i = 0; i < 6; i++) {
+        if (!(bits & (1u << i))) continue;
+        if (p && (p->stage_mask & (1u << i))) { q.stages[i] = p->stages[i]; q.stage_mask |= 1u << i; }
+        else { memset(&q.stages[i], 0, sizeof q.stages[i]); q.stage_mask &= ~(1u << i); }
+    }
+    if (!q.stage_mask) return NULL;
+    const NvnProgram *f = nvn_program_freeze(&q);
+    if (!f) {  // (the frozen table is full: one copy kept for the run)
+        NvnProgram *m = malloc(sizeof q);
+        *m = q;
+        m->frozen = m;
+        f = m;
+    }
+    return (NvnProgram *)f;
+}
+
 static void exec_list(uint64_t handle, int depth) {
     uint64_t p = handle;
     for (int guard = 0; guard < 10000000; guard++) {
@@ -6600,7 +6627,7 @@ static void exec_list(uint64_t handle, int depth) {
             for (uint64_t i = 0; i < r->x[0] && depth < 8; i++) exec_list(h[i], depth + 1);
             break;
         }
-        case CMD_BIND_PROGRAM: st.program = (NvnProgram *)(uintptr_t)r->x[0]; break;
+        case CMD_BIND_PROGRAM: st.program = bind_program_stages((NvnProgram *)(uintptr_t)r->x[0], (uint32_t)r->x[1]); break;
         case CMD_BIND_BLEND: { uint8_t *b = x; memcpy(st.blend[b[0] & 7], b, 8); break; }
         case CMD_BIND_CHANNEL_MASK: memcpy(&st.channel_mask, x, 4); break;
         case CMD_BIND_COLOR: memcpy(st.color_state, x, 4); break;

@@ -746,6 +746,8 @@ static const NvnProgram *program_freeze(const NvnProgram *p) {
     pthread_mutex_unlock(&snap_lock);
     return r;
 }
+// [XC3] exec.c: the per-stage program combinations BindProgram builds, frozen (and shared) like the programs themselves
+const NvnProgram *nvn_program_freeze(const NvnProgram *p) { return program_freeze(p); }
 
 static void set_shaders(Cpu *c, int stride) {
     NvnProgram *p = HOST(NvnProgram, A(0));

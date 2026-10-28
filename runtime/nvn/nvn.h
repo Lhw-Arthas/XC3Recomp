@@ -105,6 +105,7 @@ typedef struct NvnProgram {
     void *backend;
     const struct NvnProgram *frozen;  // [XCDE] T240: an unchanging copy of these shaders (what BindProgram records)
 } NvnProgram;
+const NvnProgram *nvn_program_freeze(const NvnProgram *p);  // [XC3] objects.c: NULL when the table is full
 
 typedef struct NvnWindow {
     uint64_t textures[8];  // guest NVNtexture*
