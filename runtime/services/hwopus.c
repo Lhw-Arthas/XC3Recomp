@@ -64,7 +64,10 @@ static uint32_t work_size(uint32_t channels) {
 SERVICE("hwopus", hwopus) {
     (void)s;
     switch (req->cmd) {
-    case 0: {  // OpenHardwareOpusDecoder(params{rate, channels}, work_buffer_size) -> IHardwareOpusDecoder
+    // [XC3] 4 / 5: the newer SDK's OpenHardwareOpusDecoderEx / GetWorkBufferSizeEx (names from XC3's sdk proxies).
+    // Their parameter is a 16-byte struct {rate, channels, option, 0} (InitializeHardwareOpusDecoder), so rate and
+    // channels sit where commands 0 / 1 have them. Without these, XC3's first sound crashed decoding with no decoder.
+    case 0: case 4: {  // OpenHardwareOpusDecoder(params{rate, channels}, work_buffer_size) -> IHardwareOpusDecoder
         Decoder *d = calloc(1, sizeof *d);
         d->rate = (int)IN(uint32_t, 0), d->channels = (int)IN(uint32_t, 4);
         int err = 0;
@@ -75,7 +78,7 @@ SERVICE("hwopus", hwopus) {
         ipc_return_object(resp, dec);
         break;
     }
-    case 1:  // GetWorkBufferSize(params) -> u32
+    case 1: case 5:  // GetWorkBufferSize(params) -> u32
         OUT(uint32_t, 0) = work_size(IN(uint32_t, 4));
         resp_size(resp, 4);
         break;
