@@ -1073,6 +1073,19 @@ void backend_present(NvnTexture *t) {
         // interiors / dungeons: their 16:9 centre, or the part inside a room wider than one screen
         extern void widescreen_present_crop(uint64_t, double, float *, double *, double *, double *, double *);
         widescreen_present_crop(total_frames, shape, crop, &vx, &vy, &vw, &vh);
+#ifndef GAME_XCDE
+        {   // [XC3] only the game's window crop is shown (objects.c nvn_window_crop), the widescreen crop inside it
+            extern bool nvn_window_crop(float out[4]);
+            float wc[4];
+            if (nvn_window_crop(wc)) {
+                if (renderer_origin_lower_left()) wc[1] = 1.0f - wc[1] - wc[3];  // (uv rows run bottom-up: present.vert)
+                crop[0] = wc[0] + crop[0] * wc[2];
+                crop[1] = wc[1] + crop[1] * wc[3];
+                crop[2] *= wc[2];
+                crop[3] *= wc[3];
+            }
+        }
+#endif
         widescreen_set_factor((float)shape);
         renderer_set_scale((float)sx, (float)sy);
         memcpy(g_shot_crop, crop, sizeof crop);

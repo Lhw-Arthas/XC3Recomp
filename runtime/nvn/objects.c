@@ -893,7 +893,38 @@ NVN(nvnWindowSetPresentInterval) {
     static int n;
     if (n++ < 20) LOG("[nvn] window present interval %d\n", (int)A(1));  // [XCDE] 60 fps work: the game's own pace
 }
-NVN(nvnWindowSetCrop) { int *cr = WIN->crop; cr[0] = (int)A(1); cr[1] = (int)A(2); cr[2] = (int)A(3); cr[3] = (int)A(4); }
+#ifndef GAME_XCDE
+// [XC3] The window crop is what the display shows of the presented texture: XC3 renders 1280x720 into its 1920x1080
+// window textures and crops to that. nvn_window_crop: the latest crop as a fraction of the window texture (x, y, w, h;
+// y from the texture's first row), false when none is set. The largest crop seen is the size the game renders for
+// (output_scale_set_base: render targets at the window's pixel size, not 2/3 of it in a 720p window).
+static float g_win_crop[4];
+static bool g_win_crop_set;
+bool nvn_window_crop(float out[4]) {
+    if (g_win_crop_set) memcpy(out, g_win_crop, sizeof g_win_crop);
+    return g_win_crop_set;
+}
+#endif
+
+NVN(nvnWindowSetCrop) {
+    int *cr = WIN->crop;
+    cr[0] = (int)A(1); cr[1] = (int)A(2); cr[2] = (int)A(3); cr[3] = (int)A(4);
+#ifndef GAME_XCDE
+    NvnTexture *t0 = WIN->num ? HOST(NvnTexture, WIN->textures[0]) : NULL;
+    if (!t0 || !t0->width || !t0->height || cr[2] <= 0 || cr[3] <= 0) return;
+    float f[4] = {(float)cr[0] / t0->width, (float)cr[1] / t0->height, (float)cr[2] / t0->width, (float)cr[3] / t0->height};
+    if (!g_win_crop_set || memcmp(f, g_win_crop, sizeof f)) LOG("[nvn] window crop %d %d %d %d of %ux%u\n", cr[0], cr[1], cr[2], cr[3], t0->width, t0->height);
+    memcpy(g_win_crop, f, sizeof f);
+    g_win_crop_set = true;
+    static int bw, bh;
+    if (cr[2] > bw || cr[3] > bh) {
+        bw = cr[2] > bw ? cr[2] : bw;
+        bh = cr[3] > bh ? cr[3] : bh;
+        extern void output_scale_set_base(int w, int h);
+        output_scale_set_base(bw, bh);
+    }
+#endif
+}
 NVN(nvnWindowGetCrop) { memcpy(AP(1), WIN->crop, 16); }
 NVN(nvnWindowAcquireTexture) {
     NvnWindow *w = WIN;
