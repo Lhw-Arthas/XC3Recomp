@@ -2426,6 +2426,7 @@ static ShaderInfo *glsl_finish(Ctx *c, bool any_branch, bool dbg) {
     int set = stage == STAGE_FRAGMENT ? 1 : stage == STAGE_GEOMETRY ? 2 : 0;  // [XCDE] geometry: set 2
     bool xfb = stage == STAGE_VERTEX && key && key->xfb_n;  // [XCDE] T134: transform feedback: stores to the heap
     if (xfb) { info->uses_gmem = true; c->uses_gmem_store = true; info->uses_gmem_store = true; }
+    if (xfb && c->glsl && maxwell_pmem_size) c->uses_pmem = true;  // [XC3] captures into the alias region (epilogue below)
     Str s = {0};
     {   // [XCDE] imageLoad on a format-less image needs GL_EXT_shader_image_load_formatted: after #version, before the rest
         bool any_image = false;
@@ -2559,13 +2560,24 @@ static ShaderInfo *glsl_finish(Ctx *c, bool any_branch, bool dbg) {
         sp(&s, "  { uint xw = xfbp[0].x + ((uint(gl_InstanceIndex) - xfbp[0].y) * xfbp[0].z + (uint(gl_VertexIndex) - xfbp[0].w)) * %uu;\n",
            key->xfb_stride / 4u);
         sp(&s, "    if (xw + %uu <= xfbp[1].x) {\n", key->xfb_stride / 4u);
+        // [XC3] xfbp[1].y != 0: the buffer is in the alias region - xw counts words from the capture start, the guest
+        // address of which (minus the region base) is xfbp[1].w:z; each word goes through the page table (as STG)
+        if (c->uses_pmem)
+            sp(&s, "      bool xpm = xfbp[1].y != 0u; uint64_t xad = (uint64_t(xfbp[1].w) << 32) | uint64_t(xfbp[1].z);\n");
         uint32_t w = 0;
         for (int i = 0; i < key->xfb_n && i < 16; i++) {
             int k = key->xfb_slot[i] - 0x20;
             for (int comp = 0; comp < key->xfb_comps[i] && comp < 4; comp++, w++) {
-                if (k >= 0 && k < 32 && (c->out_attr_mask & (1u << k))) sp(&s, "      gmem_.w[xw + %uu] = floatBitsToUint(v%d[%d]);\n", w, k, comp);
-                else if (key->xfb_slot[i] == 7) sp(&s, "      gmem_.w[xw + %uu] = floatBitsToUint(gl_Position[%d]);\n", w, comp);  // (position: unverified slot)
-                else sp(&s, "      gmem_.w[xw + %uu] = 0u;\n", w);
+                char v[64];
+                if (k >= 0 && k < 32 && (c->out_attr_mask & (1u << k))) snprintf(v, sizeof v, "floatBitsToUint(v%d[%d])", k, comp);
+                else if (key->xfb_slot[i] == 7) snprintf(v, sizeof v, "floatBitsToUint(gl_Position[%d])", comp);  // (position: unverified slot)
+                else snprintf(v, sizeof v, "0u");
+                if (c->uses_pmem)
+                    sp(&s, "      if (xpm) { uint64_t a = xad + uint64_t(xw + %uu) * 4ul; uint pe = ptab_.w[uint(a >> 16)];\n"
+                           "        if (pe != 0u) pmem_.w[uint(((uint64_t(pe - 1u) << 16) | (a & 0xFFFFul)) >> 2)] = %s; }\n"
+                           "      else gmem_.w[xw + %uu] = %s;\n", w, v, w, v);
+                else
+                    sp(&s, "      gmem_.w[xw + %uu] = %s;\n", w, v);
             }
         }
         sp(&s, "    }\n  }\n");

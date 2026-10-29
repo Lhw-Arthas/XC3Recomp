@@ -4323,10 +4323,14 @@ static void vc_mark_gpu(uint64_t lo, uint64_t hi) {
 }
 
 // A storing shader (stage 0 / 1 / 5) may write any of its bound storage buffers.
+static void xpm_note(uint64_t lo, uint64_t hi);
 static void vc_mark_sbufs(int stage) {
     for (int i = 0; i < 16; i++) {
         uint64_t a = st.sbuf[stage][i].addr, sz = st.sbuf[stage][i].size;
         if (a >= HEAP_BASE && sz && a - HEAP_BASE < HEAP_MAX) vc_mark_gpu(a - HEAP_BASE, a - HEAP_BASE + sz);
+        // [XC3] in the alias region: its readers' vertex streams come from the pool (guest_direct), as for its captures
+        // (up to 1 MB, as xsh_stored: the mirror is refreshed whole after every such draw)
+        else if (sz && sz <= (1ull << 20) && a >= maxwell_pmem_base && a - maxwell_pmem_base < maxwell_pmem_size) xpm_note(a, a + sz);
     }
 }
 
@@ -4599,10 +4603,85 @@ static void xsh_stored(int stage) {
 }
 
 static uint64_t g_direct_limit;  // (T175) bytes the buffer guest_direct returned holds from its offset (~0: the rest of it)
+// [XC3] GPU-written ranges in the alias region: transform feedback captures (draw_, through the page table) and the
+// storage buffers of storing shaders (vc_mark_sbufs). XC3's foliage / debris writers fill per-instance data there that
+// the next draws read as vertex streams; the copy those draws took when recorded was older than the writes, which run
+// later on the GPU - stale instance matrices, black streaks across the screen. After each such draw the ranges it
+// wrote are gathered from the pool's pages into a device-local mirror (pmm_refresh: the pages of one buffer need not
+// be in a row in the pool), and vertex streams starting in a mirror read it. Other alias-region streams are copied.
+typedef struct { uint64_t base, size; VkBuffer buf; VmaAllocation mem; } PmMirror;
+#define NPMM 48
+static PmMirror pmm[NPMM];
+static int npmm;
+static struct { uint64_t lo, hi; } pm_pend[16];  // (written by the draw being recorded)
+static int npm_pend;
+static void xpm_note(uint64_t lo, uint64_t hi) {
+    for (int i = 0; i < npm_pend; i++) if (pm_pend[i].lo == lo && pm_pend[i].hi == hi) return;
+    if (npm_pend < 16) pm_pend[npm_pend++] = (typeof(pm_pend[0])){lo, hi};
+}
+static PmMirror *pmm_for(uint64_t lo, uint64_t hi) {  // the mirror holding [lo, hi), made (or grown) as needed
+    for (int i = 0; i < npmm; i++)
+        if (lo >= pmm[i].base && hi <= pmm[i].base + pmm[i].size) return &pmm[i];
+    PmMirror *m = NULL;
+    for (int i = 0; i < npmm && !m; i++)
+        if (lo < pmm[i].base + pmm[i].size && hi > pmm[i].base) m = &pmm[i];  // overlapping: replaced by the union
+    if (m) {
+        if (m->base < lo) lo = m->base;
+        if (m->base + m->size > hi) hi = m->base + m->size;
+        if (vc_ndead == VC_DEAD) { vk_wait_seq(vk_pending_seq() - 1); vc_free_dead(false); }  // (freed once the GPU is done, as xsh_retire_overlaps)
+        if (vc_ndead < VC_DEAD) { vc_dead[vc_ndead].b = m->buf; vc_dead[vc_ndead].m = m->mem; vc_dead[vc_ndead++].seq = vk_pending_seq(); }
+    } else {
+        if (npmm == NPMM) return NULL;
+        m = &pmm[npmm++];
+    }
+    VkBufferCreateInfo bi = {.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO, .size = hi - lo,
+                             .usage = VK_BUFFER_USAGE_VERTEX_BUFFER_BIT | VK_BUFFER_USAGE_INDEX_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT};
+    VmaAllocationCreateInfo ai = {.usage = VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE};
+    VK_CHECK(vmaCreateBuffer(g_vk.vma, &bi, &ai, &m->buf, &m->mem, NULL));
+    m->base = lo; m->size = hi - lo;
+    return m;
+}
+static void pmm_refresh(void) {  // after a draw that wrote pm_pend (outside a render pass)
+    uint64_t psize;
+    const uint32_t *ptab;
+    pmem_import();
+    if (!npm_pend || !pmem_buf || !kernel_pmem(&psize, &ptab)) { npm_pend = 0; return; }
+    VkCommandBuffer cb = vk_cmd();
+    vk_full_barrier(cb);
+    for (int i = 0; i < npm_pend; i++) {
+        uint64_t lo = pm_pend[i].lo, hi = pm_pend[i].hi;
+        PmMirror *m = pmm_for(lo, hi);
+        if (!m) continue;
+        lo = m->base, hi = m->base + m->size;  // (whole: a grown mirror is filled from the pool)
+        VkBufferCopy cp[64];
+        int nc = 0;
+        for (uint64_t a = lo; a < hi;) {
+            uint64_t pg_end = (a | (PLAT_PMEM_PAGE - 1)) + 1, e = pg_end < hi ? pg_end : hi;
+            uint32_t pe = ptab[(a - maxwell_pmem_base) / PLAT_PMEM_PAGE];
+            if (pe) cp[nc++] = (VkBufferCopy){(uint64_t)(pe - 1) * PLAT_PMEM_PAGE + (a & (PLAT_PMEM_PAGE - 1)), a - m->base, e - a};
+            if (nc == 64) { vkCmdCopyBuffer(cb, pmem_buf, m->buf, 64, cp); nc = 0; }
+            a = e;
+        }
+        if (nc) vkCmdCopyBuffer(cb, pmem_buf, m->buf, (uint32_t)nc, cp);
+    }
+    vk_full_barrier(cb);
+    npm_pend = 0;
+}
+static bool pmem_direct(uint64_t addr, uint64_t size, VkBuffer *buf, VkDeviceSize *off) {
+    for (int i = 0; i < npmm; i++)
+        if (addr >= pmm[i].base && addr < pmm[i].base + pmm[i].size) {
+            *buf = pmm[i].buf;
+            *off = addr - pmm[i].base;
+            g_direct_limit = pmm[i].base + pmm[i].size - addr;
+            return true;
+        }
+    return false;
+}
 static bool guest_direct(uint64_t addr, uint64_t size, VkBuffer *buf, VkDeviceSize *off) {
     static int copy = -1;
     if (copy < 0) copy = getenv("LARECOMP_VK_COPY_VERTICES") != NULL;
-    if (copy || addr < HEAP_BASE) return false;
+    if (copy) return false;
+    if (addr < HEAP_BASE) return npmm && pmem_direct(addr, size, buf, off);
     if (addr + size > HEAP_BASE + gmem_size && kernel_heap_size() != gmem_tried) { gmem_tried = kernel_heap_size(); gmem_info(); }
     if (!gmem_buf || addr + size > HEAP_BASE + gmem_size) return false;
     g_direct_limit = ~0ull;
@@ -5300,7 +5379,11 @@ static void draw_(CmdRec *r, bool indexed) {
     // [XCDE] T134: transform feedback (the game's grass and cloth "writer" draws): a vertex shader variant that stores
     // its captured outputs to the buffer. Capture order is exact for non-indexed lists (the game's point draws).
     bool xfb = false;
-    if (st.xfb_on && st.xfb_buf[0].addr >= HEAP_BASE && !(st.program->stage_mask & 4)) {
+    // [XC3] also into the alias region when its pages are in the physical memory pool (translate.c: the capture goes
+    // through the page table). XC3 keeps its buffers there: its foliage / debris writer draws captured nothing and the
+    // draws reading their per-instance matrices drew stale memory - black streaks across the screen.
+    bool xfb_pm = st.xfb_buf[0].addr >= maxwell_pmem_base && st.xfb_buf[0].addr - maxwell_pmem_base < maxwell_pmem_size;
+    if (st.xfb_on && (st.xfb_buf[0].addr >= HEAP_BASE || xfb_pm) && !(st.program->stage_mask & 4)) {
         uint32_t m = (uint32_t)r->x[0];
         if (indexed || (m != 0 && m != 1 && m != 4)) {
             static int warned;
@@ -5677,11 +5760,19 @@ static void draw_(CmdRec *r, bool indexed) {
         uint32_t xfirst = (uint32_t)r->x[1], xcount = (uint32_t)r->x[2], xbase = (uint32_t)r->x[3], xinst = r->x[4] ? (uint32_t)r->x[4] : 1;
         uint64_t at = st.xfb_buf[0].addr + st.xfb_written, end = st.xfb_buf[0].addr + st.xfb_buf[0].size;
         memset(g_xfbp, 0, sizeof g_xfbp);
-        g_xfbp[0] = (uint32_t)((at - HEAP_BASE) / 4); g_xfbp[1] = xbase; g_xfbp[2] = xcount; g_xfbp[3] = xfirst;
-        g_xfbp[4] = (uint32_t)((end - HEAP_BASE) / 4);
+        g_xfbp[1] = xbase; g_xfbp[2] = xcount; g_xfbp[3] = xfirst;
         uint64_t bytes = (uint64_t)xcount * xinst * vkey.xfb_stride;
-        if (at < end) vc_mark_gpu(at - HEAP_BASE, (at + bytes < end ? at + bytes : end) - HEAP_BASE);
-        if (at < end) { xfb_at = at; xfb_bytes = bytes; }
+        if (xfb_pm) {  // [XC3] words from the capture start, its address in the alias region (translate.c xfb epilogue)
+            uint64_t rel = at - maxwell_pmem_base;
+            g_xfbp[4] = at < end ? (uint32_t)((end - at) / 4) : 0;
+            g_xfbp[5] = 1; g_xfbp[6] = (uint32_t)rel; g_xfbp[7] = (uint32_t)(rel >> 32);
+            xpm_note(st.xfb_buf[0].addr, st.xfb_buf[0].addr + st.xfb_buf[0].size);  // (its readers: guest_direct)
+        } else {
+            g_xfbp[0] = (uint32_t)((at - HEAP_BASE) / 4);
+            g_xfbp[4] = (uint32_t)((end - HEAP_BASE) / 4);
+            if (at < end) vc_mark_gpu(at - HEAP_BASE, (at + bytes < end ? at + bytes : end) - HEAP_BASE);
+            if (at < end) { xfb_at = at; xfb_bytes = bytes; }
+        }
         st.xfb_written += bytes;
         if (g_debug_frame) LOG("[xfb] vs %llx -> %llx (+%llu bytes, %u x %u, stride %u)\n", (unsigned long long)st.program->stages[0].code_addr,
                                (unsigned long long)at, (unsigned long long)bytes, xcount, xinst, vkey.xfb_stride);
@@ -5962,6 +6053,7 @@ static void draw_(CmdRec *r, bool indexed) {
         if (nwant) { if (pr->vi->uses_gmem_store) xsh_stored(0); if (pr->fi->uses_gmem_store) xsh_stored(1); }  // (T197)
     }
     if (xfb_bytes) { vk_end_pass(); st.rt_dirty = true; xsh_written(st.xfb_buf[0].addr, st.xfb_buf[0].size, xfb_at, xfb_bytes); }  // [XCDE] T175
+    if (npm_pend) { vk_end_pass(); st.rt_dirty = true; pmm_refresh(); }  // [XC3] alias-region writes: their mirrors
     if (g_debug_frame && getenv("XCDE_DUMP_VB")) {  // [XCDE] debugging: what each stream holds when the GPU has run this draw
         char code[32]; snprintf(code, sizeof code, "%llx", (unsigned long long)st.program->stages[0].code_addr);
         if (strstr(getenv("XCDE_DUMP_VB"), code)) {
@@ -5982,7 +6074,7 @@ static void draw_(CmdRec *r, bool indexed) {
             st.rt_dirty = true;
         }
     }
-    if (g_debug_frame && xfb && getenv("XCDE_DUMP_XFB")) {  // [XCDE] debugging: what the capture holds once this draw ran
+    if (g_debug_frame && xfb && !g_xfbp[5] && getenv("XCDE_DUMP_XFB")) {  // [XCDE] debugging: what the capture holds once this draw ran
         vk_end_pass();
         renderer_flush();
         uint64_t at = (uint64_t)g_xfbp[0] * 4 + HEAP_BASE, bytes = (uint64_t)((uint32_t)r->x[2]) * (r->x[4] ? (uint32_t)r->x[4] : 1) * vkey.xfb_stride;
