@@ -3271,7 +3271,28 @@ void vk_prewarm_hold(uint64_t frame_draws) {
     }
     int burst = atomic_exchange(&g_reg_burst, 0);
     bool reg_hold = reg_min > 0 && burst >= reg_min && reg_ms > 0;
+#ifndef GAME_XCDE
+    // [XC3] A movie's frames have few draws (25-51) and the game loads the next scene meanwhile: each frame of the
+    // opening movie was held for the full 8 s on a cold cache. Nothing 3D can come out wrong under a movie: no hold.
+    extern bool xcde_movie_playing(void);
+    if (xcde_movie_playing()) {
+        static int nl;
+        if (!nl++) LOG("[prewarm] XC3: no loading hold while a movie plays\n");
+        return;
+    }
+#endif
     if (!max_ms || sync_shaders() || (frame_draws > (uint64_t)max_draws && !reg_hold)) return;
+#ifndef GAME_XCDE
+    // [XC3] after a hold that stopped on long builds (below), the next frames go on at once while those are all that is
+    // left: nothing finished and no programs registered since (one second a frame was the title screen at 1 fps)
+    static int stuck_left = -1;
+    if (stuck_left >= 0) {
+        int now_left = __atomic_load_n(&pw_n, __ATOMIC_RELAXED) + pw_npending + pl_npending + lv_npending + atomic_load(&g_jobs_queued) +
+                       atomic_load(&g_jobs_busy) + atomic_load(&g_xlat_queued);
+        if (!burst && now_left >= stuck_left) return;
+        stuck_left = -1;
+    }
+#endif
     int lim = frame_draws > (uint64_t)max_draws && reg_ms < max_ms ? reg_ms : max_ms;
     uint64_t t0 = SDL_GetTicksNS(), dl = t0 + (uint64_t)lim * 1000000ull;
     int n0 = -1;
@@ -3279,14 +3300,31 @@ void vk_prewarm_hold(uint64_t frame_draws) {
         prewarm_drain();  // (programs registered meanwhile, ready translations -> their library / pipeline jobs)
         int left = __atomic_load_n(&pw_n, __ATOMIC_RELAXED) + pw_npending + pl_npending + lv_npending + atomic_load(&g_jobs_queued) +
                    atomic_load(&g_jobs_busy) + atomic_load(&g_xlat_queued);
-        if (n0 < 0) n0 = left;
-        if (!left || SDL_GetTicksNS() >= dl) {
+        bool first = n0 < 0;
+        if (first) n0 = left;
+        bool idle = false;
+#ifndef GAME_XCDE
+        // [XC3] Only while the work left goes down: a vertex shader of thousands of instructions takes AMD's compiler
+        // 6-9 s, and with one of those running (or queued behind them) every hold ran to its time limit - the title
+        // screen and transitions (22-27 draws) frozen 8 s a frame, 37 holds = 206 s of a 330 s cold run. Once nothing
+        // has finished for XC3_HOLD_IDLE_MS (default 1000; 0: wait to the limit as XCDE) the frame goes on.
+        static int64_t idle_ms = -1;
+        if (idle_ms < 0) idle_ms = getenv("XC3_HOLD_IDLE_MS") ? atoll(getenv("XC3_HOLD_IDLE_MS")) : 1000;
+        static int last_left;
+        static uint64_t t_moved;
+        uint64_t now = SDL_GetTicksNS();
+        if (first || left < last_left) t_moved = now;  // (finished work; new work registered meanwhile doesn't count)
+        last_left = left;
+        idle = idle_ms > 0 && left && now - t_moved >= (uint64_t)idle_ms * 1000000ull;
+        if (idle) stuck_left = left;
+#endif
+        if (!left || idle || SDL_GetTicksNS() >= dl) {
             uint64_t ms = (SDL_GetTicksNS() - t0) / 1000000;
             static int nlog;
             if (n0 > 0 && nlog++ < 200)
                 LOG("[prewarm] %s (%llu draws, %d programs registered) held %llu ms for %d builds%s\n",
                     frame_draws > (uint64_t)max_draws ? "scene start" : "loading frame", (unsigned long long)frame_draws, burst,
-                    (unsigned long long)ms, n0, left ? " (time limit: some left)" : "");
+                    (unsigned long long)ms, n0, idle ? " (only long builds left)" : left ? " (time limit: some left)" : "");
             return;
         }
         SDL_Delay(1);
