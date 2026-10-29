@@ -1248,6 +1248,35 @@ static const char *gat(Ctx *c, const char *fn, const char *idx, const char *v) {
     return o;
 }
 
+// [XCDE] Video instructions (VMAD / VSETP / VMNMX): the byte / half / word parts of A and B selected (bit 3 of a select:
+// signed), as Ryujinx. A select = bit 48 << 3 | bits 36..38, B select = bit 49 << 3 | bits 28..30; B a register (bit 50)
+// or a 16-bit immediate (used whole). sa / sb: the parts as uint expressions (160 bytes each).
+static void video_parts(Ctx *c, uint64_t w, int a, char *sa, char *sb, int *asel_out, int *bsel_out) {
+    int asel = (int)((bits(w, 48, 1) << 3) | bits(w, 36, 3)), bsel = (int)((bits(w, 49, 1) << 3) | bits(w, 28, 3));
+    char ra[16], rbuf[16];
+    const char *av = a == RZ ? "0u" : reg(c, a, ra);
+    int b = (int)bits(w, 20, 8);
+    char bimm[24];
+    const char *bv;
+    if (bits(w, 50, 1)) bv = b == RZ ? "0u" : reg(c, b, rbuf);
+    else {
+        uint32_t imm = (uint32_t)bits(w, 20, 16);
+        if (bsel & 8) imm = (uint32_t)(int32_t)(int16_t)imm;
+        sprintf(bimm, "0x%08xu", imm); bv = bimm; bsel = 6 | (bsel & 8);  // (an immediate is used whole)
+    }
+    const char *const sels[2] = {av, bv};
+    char *outs[2] = {sa, sb};
+    int ss[2] = {asel, bsel};
+    for (int k = 0; k < 2; k++) {
+        int s7 = ss[k] & 7; bool sg = ss[k] & 8;
+        if (s7 < 4) snprintf(outs[k], 160, sg ? "uint(sx8(%s >> %du))" : "((%s >> %du) & 0xFFu)", sels[k], s7 * 8);
+        else if (s7 < 6) snprintf(outs[k], 160, sg ? "uint(sx16(%s >> %du))" : "((%s >> %du) & 0xFFFFu)", sels[k], (s7 - 4) * 16);
+        else snprintf(outs[k], 160, "%s", sels[k]);
+    }
+    *asel_out = asel;
+    *bsel_out = bsel;
+}
+
 static void emit_insn(Ctx *c, uint64_t w, uint32_t pc) {
     char t[2048], u[2048];
     int d = (int)bits(w, 0, 8), a = (int)bits(w, 8, 8);
@@ -1631,29 +1660,10 @@ static void emit_insn(Ctx *c, uint64_t w, uint32_t pc) {
         sprintf(t, "((%s << %du) + 0x%08xu)", R(a), (int)bits(w, 53, 5), (uint32_t)bits(w, 20, 32));
         set_reg(c, d, t);
     } else if (OPM(0x5f00000000000000ull, 0xff00000000000000ull) || OPM(0x50f0000000000000ull, 0xfff8000000000000ull)) {
-        // [XCDE] VMAD / VSETP (video): byte / half / word parts of A and B selected (bit 3 of a select: signed), as Ryujinx.
-        // A select = bit 48 << 3 | bits 36..38, B select = bit 49 << 3 | bits 28..30; B a register (bit 50) or a 16-bit immediate.
-        int asel = (int)((bits(w, 48, 1) << 3) | bits(w, 36, 3)), bsel = (int)((bits(w, 49, 1) << 3) | bits(w, 28, 3));
-        char sa[160], sb[160], ra[16], rbuf[16];
-        const char *av = a == RZ ? "0u" : reg(c, a, ra);
-        int b = (int)bits(w, 20, 8);
-        char bimm[24];
-        const char *bv;
-        if (bits(w, 50, 1)) bv = b == RZ ? "0u" : reg(c, b, rbuf);
-        else {
-            uint32_t imm = (uint32_t)bits(w, 20, 16);
-            if (bsel & 8) imm = (uint32_t)(int32_t)(int16_t)imm;
-            sprintf(bimm, "0x%08xu", imm); bv = bimm; bsel = 6 | (bsel & 8);  // (an immediate is used whole)
-        }
-        const char *const sels[2] = {av, bv};
-        char *outs[2] = {sa, sb};
-        int ss[2] = {asel, bsel};
-        for (int k = 0; k < 2; k++) {
-            int s7 = ss[k] & 7; bool sg = ss[k] & 8;
-            if (s7 < 4) sprintf(outs[k], sg ? "uint(sx8(%s >> %du))" : "((%s >> %du) & 0xFFu)", sels[k], s7 * 8);
-            else if (s7 < 6) sprintf(outs[k], sg ? "uint(sx16(%s >> %du))" : "((%s >> %du) & 0xFFFFu)", sels[k], (s7 - 4) * 16);
-            else sprintf(outs[k], "%s", sels[k]);
-        }
+        // [XCDE] VMAD / VSETP (video): byte / half / word parts of A and B (video_parts)
+        char sa[160], sb[160];
+        int asel, bsel;
+        video_parts(c, w, a, sa, sb, &asel, &bsel);
         bool sgn = (asel & 8) || (bsel & 8);
         if (OPM(0x5f00000000000000ull, 0xff00000000000000ull)) {  // VMAD: d = a * b + c (low 32 bits)
             int cr = (int)bits(w, 39, 8);
@@ -1672,6 +1682,24 @@ static void emit_insn(Ctx *c, uint64_t w, uint32_t pc) {
             if (q != PT) { c->pred_used[q] = 1; sp(&c->body, "      p%d = !cmp %s pp;\n", q, bool_op(bo)); }
             sp(&c->body, "    }\n");
         }
+    } else if (OPM(0x3a00000000000000ull, 0xfe00000000000000ull)) {
+        // [XC3] VMNMX (video min / max; yuzu shader_recompiler video_minimum_maximum.cpp): d = op(mx ? max(A, B) : min(A, B), C).
+        // A / B parts as VMAD (video_parts); the first min / max signed as B (bit 49), the second as bit 54. op (bits 51..53):
+        // 5 MIN, 6 MAX - the merge / accumulate ops (0..4), .SAT (bit 55) and .CC (bit 47) fail the translation (yuzu doesn't
+        // have them either; XC3's lighting shaders, shd_lgt.wishp, use only unsigned whole-register MIN / MAX).
+        int op = (int)bits(w, 51, 3);
+        if (op != 5 && op != 6) { fail(c, "vmnmx op %d", op); return; }
+        if (bits(w, 55, 1) || bits(w, 47, 1)) { fail(c, "vmnmx .sat / .cc"); return; }
+        char sa[160], sb[160], rc[16];
+        int asel, bsel;
+        video_parts(c, w, a, sa, sb, &asel, &bsel);
+        bool s1 = bits(w, 49, 1), s2 = bits(w, 54, 1);
+        const char *f1 = bits(w, 56, 1) ? "max" : "min", *f2 = op == 6 ? "max" : "min";
+        int cr = (int)bits(w, 39, 8);
+        const char *cv = cr == RZ ? "0u" : reg(c, cr, rc);
+        if (s1) sprintf(u, "uint(%s(int(%s), int(%s)))", f1, sa, sb); else sprintf(u, "%s(%s, %s)", f1, sa, sb);
+        if (s2) sprintf(t, "uint(%s(int(%s), int(%s)))", f2, u, cv); else sprintf(t, "%s(%s, %s)", f2, u, cv);
+        set_reg(c, d, t);
     } else if (OPM(0x5b60000000000000ull, 0xfff0000000000000ull) || OPM(0x4b60000000000000ull, 0xfff0000000000000ull) ||
                OPM(0x3660000000000000ull, 0xfef0000000000000ull)) {  // ISETP
         char cmp[512];
