@@ -10,6 +10,8 @@
 
 #include "vk.h"
 #include "shaders.h"
+#include "temporal.h"
+#include "../output_scale.h"
 void vk_watch(VkImage dst, const char *site);  // [XCDE] debugging: log writes to a watched image
 #include "../astc.h"
 #include "../renderer.h"
@@ -275,6 +277,16 @@ static void target_scale(const TexBackend *b, float *sx, float *sy) {
     if (b->scalable == 2) { *sx = *sy = fminf(g_rs_x, g_rs_y); return; }
     *sx = b->scalable ? g_rs_x : 1;
     *sy = b->scalable ? g_rs_y : 1;
+    if (b->scene) {  // [XC3] the scene chain at the upscalers' quality mode (the translated shaders read each target's own scale)
+        float k = (float)output_scale_scene_factor(tmp_enabled());
+        *sx *= k, *sy *= k;
+    }
+}
+// [XC3] a 16:9 target at most half the game's frame size (960x544 and below at 1080p): XC3's scene and its effect chain
+static bool tex_scene(const NvnTexture *t) {
+    int bw, bh;
+    output_scale_base(&bw, &bh);
+    return t->width * 2 <= (uint32_t)bw + 16;
 }
 
 bool renderer_texture_first_write(NvnTexture *t) {
@@ -579,6 +591,7 @@ static TexBackend *tex_backend(NvnTexture *t) {
     vk_collect_dead();
     b = calloc(1, sizeof *b);
     b->scalable = tex_scalable(t);
+    b->scene = b->scalable == 1 && tex_scene(t);
     create_image(t, b);
     t->backend = b;
     live_add(t, b);

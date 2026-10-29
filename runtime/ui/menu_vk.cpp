@@ -206,10 +206,12 @@ static void ui(void) {
             if (ImGui::Combo(T("Escalado / antialiasing"), &ui_, TL(ups, 5).p, 5)) g_settings.upscaler = upv[ui_];
             if (g_settings.upscaler == UPSCALE_DLSS && !dlss_available())
                 ImGui::TextColored(ImVec4(1, 0.8f, 0.3f, 1), T("DLSS se carga al iniciar el juego: hasta reiniciar se usa FSR 3.1."));
-            if (false && UPSCALE_TEMPORAL(g_settings.upscaler)) {  // [XC3] no quality mode / frame generation (launcher.cpp)
+            if (UPSCALE_TEMPORAL(g_settings.upscaler)) {  // [XC3] the scene's render size; no frame generation (launcher.cpp)
                 static const char *uq[] = {"Nativo (solo antialiasing)", "Calidad (67 %)", "Equilibrado (59 %)", "Rendimiento (50 %)",
                                            "Ultra rendimiento (33 %)"};
                 ImGui::Combo(T("Calidad del escalado"), &g_settings.upscale_quality, TL(uq, 5).p, 5);
+            }
+            if (false) {
                 ImGui::BeginDisabled(g_settings.upscaler != UPSCALE_FSR3);
                 ImGui::Checkbox(T("Generación de frames (FSR 3; activarla por primera vez: al reiniciar)"), &g_settings.frame_gen);
                 ImGui::EndDisabled();

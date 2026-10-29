@@ -82,6 +82,7 @@ typedef struct TexBackend {
     bool first_up_zero;       // that upload's data was all zero bytes
     uint32_t wgen;  // page write tracking generation at the last upload check (textures.c)
     uint8_t scalable;  // 0 fixed size, 1 the 16:9 scene targets (sx, sy), 2 [XCDE] T182 portrait targets (uniform)
+    bool scene;        // [XC3] a 16:9 target at most half the game's frame size: x output_scale_scene_factor()
     bool presented;
     uint64_t touched_frame, frame_cleared;
     uint32_t level_gen;

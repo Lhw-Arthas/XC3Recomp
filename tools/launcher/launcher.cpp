@@ -89,7 +89,7 @@ struct Cfg {
     int win = DEF_WIN;      // index into k_wins
     int res = 0;            // index into k_res
     int upscaler = 1;       // 0 bilinear, 1 FSR 1, 2 FSR 3.1, 3 DLSS, 4 FSR 4 ([XC3])
-    int uquality = 1;       // FSR 3 / DLSS: 0 native AA, 1 quality, 2 balanced, 3 performance, 4 ultra performance
+    int uquality = 3;       // FSR 3 / DLSS: 0 native AA, 1 quality, 2 balanced, 3 performance, 4 ultra performance
     bool frame_gen = false;
     bool smaa = false;
     bool dof = true;        // the game's depth of field (T183)
@@ -219,6 +219,10 @@ static const char *const k_en[][2] = {
      "antes de reconstruir (porcentaje del lado de la ventana).",
      "With 'Internal resolution' on 'Match the window': the resolution rendered\n"
      "before reconstruction (percentage of the window's side)."},
+    {"La resolución a la que se renderiza la escena antes de reconstruirla (porcentaje del lado\n"
+     "de la ventana). Rendimiento = la del juego original (la mitad); Nativo = la de la ventana.",
+     "The resolution the scene is rendered at before reconstruction (percentage of the window's\n"
+     "side). Performance = the original game's (half); Native = the window's."},
     {"Generación de frames (FSR 3)", "Frame generation (FSR 3)"},
     {"Inserta un frame interpolado entre cada dos del juego en todo el juego: el doble de imágenes\n"
      "por segundo (p. ej. FPS 30 -> 60 en pantalla). La de AMD: funciona con FSR 3.1 y con DLSS.\n"
@@ -716,6 +720,14 @@ static void tab_graphics() {
                           "renderiza a la mitad del tamaño de la ventana) y reconstruyen la imagen con varios frames.\n"
                           "FSR 4 necesita una GPU AMD RDNA 4 (Radeon RX 9000); en otras se usa FSR 3.1.\n"
                           "DLSS necesita una GPU NVIDIA RTX; si no está disponible se usa FSR 3.1."));
+    if (g.upscaler >= 2) {  // [XC3] the scene's render size (output_scale_scene_factor); 'Performance' = the game's own
+        const char *uq[] = {"Nativo (solo antialiasing: DLAA / FSR Native AA)", "Calidad (67 %)", "Equilibrado (59 %)",
+                            "Rendimiento (50 %)", "Ultra rendimiento (33 %)"};
+        ImGui::SetNextItemWidth(320 * g_scale);
+        ImGui::Combo(T("Calidad del escalado"), &g.uquality, TL(uq, 5).p, 5);
+        ImGui::SetItemTooltip(T("La resolución a la que se renderiza la escena antes de reconstruirla (porcentaje del lado\n"
+                              "de la ventana). Rendimiento = la del juego original (la mitad); Nativo = la de la ventana."));
+    }
     if (false) {
 #else
     const char *ups[] = {"Bilineal (suave)", "AMD FSR 1.0 (nítido)", "AMD FSR 3.1 (temporal, cualquier GPU)",

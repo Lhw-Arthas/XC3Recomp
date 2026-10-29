@@ -67,6 +67,14 @@ void output_scale_set_base(int w, int h) {
     LOG("[scale] the game renders for %dx%d\n", w, h);
 }
 
+void output_scale_base(int *w, int *h) { *w = (int)g_base_w; *h = (int)g_base_h; }
+
+double output_scale_scene_factor(bool temporal) {
+    static const double ratio[] = {1.0, 1.5, 1.7, 2.0, 3.0};  // (UQ_*: FSR / DLSS render size = output / ratio)
+    int q = g_settings.upscale_quality;
+    return temporal ? 2.0 / ratio[q >= 0 && q <= 4 ? q : UQ_PERFORMANCE] : 1.0;
+}
+
 void output_scale(double dw, double dh, bool reshape_allowed, double now, double gpu_ms, OutScale *o) {
     double fit = fmin(dw / g_base_w, dh / g_base_h);
     static double forced = -1, wide_test = -1;
@@ -86,14 +94,8 @@ void output_scale(double dw, double dh, bool reshape_allowed, double now, double
         else if (mode == RES_Q75) h *= 0.75;
         else if (mode == RES_Q25) h *= 0.25;
         else if (mode == RES_Q50) h *= 0.5;
-        // [XCDE] temporal upscalers (FSR 3 / DLSS): Match display at the quality mode's render size
-        // [XC3] not for XC3: its scene is already rendered at half its output size and FSR / DLSS replace its own
-        // upscale (exec.c xc3_tmp_upscale) at that size - a lower render scale would only shrink both
-        else if (false && mode == RES_MATCH && UPSCALE_TEMPORAL(g_settings.upscaler)) {
-            static const double ratio[] = {1.0, 1.5, 1.7, 2.0, 3.0};
-            int q = g_settings.upscale_quality;
-            h /= ratio[q >= 0 && q <= 4 ? q : 1];
-        }
+        // [XCDE] the temporal upscalers' quality mode lowered the whole render scale here; [XC3] it sets the scene
+        // targets' own factor instead (output_scale_scene_factor): the output and the HUD stay at the window's size
     }
     h = fmax(h, 0.1);  // (.25x of a small window)
     double sx = h * shape, sy = h;

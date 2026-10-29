@@ -13,3 +13,8 @@ void output_scale(double dw, double dh, bool reshape_allowed, double now, double
 double output_scale_dynamic_factor(void);
 // [XCDE] T146: the game's own frame size (its NVN window textures); the scale is relative to it (default 1920x1080)
 void output_scale_set_base(int w, int h);
+void output_scale_base(int *w, int *h);
+// [XC3] the temporal upscalers' quality mode on XC3's scene targets (rendered at half its frame size, then upscaled by
+// FSR / DLSS in place of the game's own pass): 2 / the mode's ratio (Native 2 .. Performance 1 .. Ultra 0.67);
+// temporal: such an upscaler runs (else 1: the game's own upscale wants its scene at its own size)
+double output_scale_scene_factor(bool temporal);
