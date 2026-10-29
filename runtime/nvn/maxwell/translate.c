@@ -719,8 +719,10 @@ static const char *RSC2(Ctx *c, int slot, const char *fmt, ...) {
     // [XCDE] T178 class: a fragment fetching its own guest pixel from a texture scaled like its render target reads its
     // own scaled pixel, not the centre of its block. Measured at 4K (user meadow save): same sharpness, small deltas -
     // off by default (XCDE_RSC_PIXEL=1: on).
+    // [XC3] on by default (XCDE_RSC_PIXEL=0: off): with the block centre, XC3's scene above its own size (quality
+    // modes, 2x) drew dark lines along depth edges (distant mountains against the sky) - dotted at 1.33x
     static int pix = -1;
-    if (pix < 0) { const char *e = getenv("XCDE_RSC_PIXEL"); pix = e && *e == '1'; }
+    if (pix < 0) { const char *e = getenv("XCDE_RSC_PIXEL"); pix = !(e && *e == '0'); }
     if (pix && c->stage == STAGE_FRAGMENT) snprintf(o, 1024, "rscf(%s, rscale[%d], rscale[0], gl_FragCoord.xy)", inner, slot + 1);
     else snprintf(o, 1024, "rsc(%s, rscale[%d])", inner, slot + 1);
     return o;
