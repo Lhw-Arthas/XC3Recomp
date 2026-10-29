@@ -158,8 +158,8 @@ uint64_t vk_pending_seq(void) { return submit_seq + 1; }
 // timestamp at its place in the command stream; once that submission is done (the game waits on its fence before
 // reading - on the Switch the GPU writes them too) the GPU time replaces the provisional host value, in the host
 // clock's terms (offset calibrated at each resolve: a timestamp can't be later than the moment its submission is seen
-// done). LARECOMP_VK_COUNTER=cpu: host clock only; =frozen: one value per presented frame (test); =legacy: the host
-// clock in ns instead of GPU ticks, as before (test: reproduces the locked 30).
+// done). LARECOMP_VK_COUNTER=cpu: host clock only; =frozen: one value per presented frame ([XC3] the default); =gpu:
+// as described; =legacy: the host clock in ns instead of GPU ticks, as before (test: reproduces the locked 30).
 #define CQ_MAX 64
 typedef struct { VkQueryPool pool; uint32_t n; uint64_t seq; uint64_t *out[CQ_MAX]; } CounterQ;
 static CounterQ cq[SUBS];
@@ -176,7 +176,10 @@ static int vk_counter_mode(void) {
     if (counter_mode < 0 && diag_deterministic()) counter_mode = 1;  // [XCDE] T029: one virtual timestamp per frame
     if (counter_mode < 0) {
         const char *e = getenv("LARECOMP_VK_COUNTER");
-        counter_mode = e && !strcmp(e, "cpu") ? 0 : e && !strcmp(e, "frozen") ? 1 : e && !strcmp(e, "legacy") ? 3 : 2;
+        // [XC3] frozen by default: XC3 lowers its render size (dynamic resolution: 960x544 -> 848x480 / 792x448 /
+        // 672x384 at 1080p) from these times, also when our pacing reported a slow frame; with no GPU time it keeps the
+        // full size. =gpu: the GPU's times (the game's dynamic resolution back)
+        counter_mode = e && !strcmp(e, "cpu") ? 0 : e && !strcmp(e, "legacy") ? 3 : e && !strcmp(e, "gpu") ? 2 : 1;
         if (counter_mode == 2 && !g_vk.props.limits.timestampComputeAndGraphics) counter_mode = 0;
     }
     return counter_mode;
