@@ -18,6 +18,7 @@ void tmp_jitter(float j[2]);
 void tmp_hud_snapshot(VkCommandBuffer cb, TexBackend *b);
 bool tmp_hud_started(void);
 void tmp_set_velocity(TexBackend *v);  // [XCDE] T215: the game's own velocity buffer this frame (G-buffer, RGB10A2)
+TexBackend *tmp_output(void);  // [XC3] the image of tmp_upscale's last result (RGBA8, out_w x out_h)
 VkImageView tmp_hud_scene_view(uint32_t w, uint32_t h);  // this frame's image before the HUD (render size) or NULL  // this frame's scene composite is done: the HUD follows (never jittered)  // [XCDE] T213: the presented image before the HUD passes    // the next frame's sub-pixel jitter (render pixels, y down)
 // The upscaled image (out_w x out_h) of `color` (render size) or VK_NULL_HANDLE (not this frame: no camera / depth -
 // the caller presents as without it). Records into cb, outside any rendering. depth: the scene depth (depth aspect).

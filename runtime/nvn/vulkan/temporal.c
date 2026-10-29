@@ -47,8 +47,12 @@ static bool ffx_load(void) {
     if (ffx_state) return ffx_state > 0;
     ffx_state = -1;
 #ifdef _WIN32
-    HMODULE m = LoadLibraryA("amd_fidelityfx_vk.dll");
-    if (!m) { LOG("[tmp] amd_fidelityfx_vk.dll not found: FSR 3 unavailable\n"); return false; }
+    // [XC3] the FSR SDK 2.x loader (amd_fidelityfx_loader_vk.dll + amd_fidelityfx_upscaler_vk.dll next to the exe: FSR 3.1
+    // and FSR 4, same API), else the SDK 1.1.4 single DLL
+    const char *dll = "amd_fidelityfx_loader_vk.dll";
+    HMODULE m = LoadLibraryA(dll);
+    if (!m) m = LoadLibraryA(dll = "amd_fidelityfx_vk.dll");
+    if (!m) { LOG("[tmp] amd_fidelityfx_loader_vk.dll / amd_fidelityfx_vk.dll not found: FSR unavailable\n"); return false; }
     ffx_create = (PfnFfxCreateContext)(void *)GetProcAddress(m, "ffxCreateContext");
     ffx_destroy = (PfnFfxDestroyContext)(void *)GetProcAddress(m, "ffxDestroyContext");
     ffx_dispatch = (PfnFfxDispatch)(void *)GetProcAddress(m, "ffxDispatch");
@@ -56,7 +60,7 @@ static bool ffx_load(void) {
     ffx_configure = (PfnFfxConfigure)(void *)GetProcAddress(m, "ffxConfigure");
     if (!ffx_create || !ffx_destroy || !ffx_dispatch || !ffx_query || !ffx_configure) { LOG("[tmp] amd_fidelityfx_vk.dll: entry points missing\n"); return false; }
     ffx_state = 1;
-    LOG("[tmp] FidelityFX API loaded (FSR 3.1)\n");
+    LOG("[tmp] FidelityFX API loaded (%s)\n", dll);
     return true;
 #else
     return false;
@@ -396,7 +400,32 @@ static bool fsr_context(uint32_t ow, uint32_t oh) {
                                                       FFX_UPSCALE_ENABLE_DYNAMIC_RESOLUTION,
                                              .maxRenderSize = {ow, oh}, .maxUpscaleSize = {ow, oh}, .fpMessage = fsr_message};
     if (env_int("XCDE_TMP_DEBUG")) cd.flags |= FFX_UPSCALE_ENABLE_DEBUG_CHECKING;
+    // [XC3] FSR SDK 2.x: the Vulkan backend description has a new type id (backend VK sub-id 3, same fields); the 1.1.4
+    // id (3) is its _DEPRECATED form - tried second
+    be.header.type = 0x01000003u;
+    // [XC3] the upscaler version (SDK 2.x: FSR 3.1 and FSR 4 in amd_fidelityfx_upscaler_vk.dll; the newest the GPU runs
+    // by default): XC3_FSR_VERSION=<text> picks the first version whose name starts with it ("3.1", "4")
+    struct { ffxApiHeader header; uint64_t versionId; } ov = {{5u /* FFX_API_DESC_TYPE_OVERRIDE_VERSION */, NULL}, 0};
+    {
+        struct { VkDevice d; VkPhysicalDevice p; PFN_vkGetDeviceProcAddr f; } dc = {g_vk.dev, g_vk.phys, ffx_proc};
+        uint64_t n = 16, ids[16];
+        const char *names[16];
+        struct { ffxQueryDescHeader header; uint64_t createDescType; void *device; uint64_t *outputCount; uint64_t *versionIds;
+                 const char **versionNames; } q = {{4u /* FFX_API_QUERY_DESC_TYPE_GET_VERSIONS */, NULL}, FFX_API_CREATE_CONTEXT_DESC_TYPE_UPSCALE,
+                                                   &dc, &n, ids, names};
+        const char *want = getenv("XC3_FSR_VERSION");
+        if (ffx_query(NULL, &q.header) == FFX_API_RETURN_OK) {
+            static int logged;
+            for (uint64_t i = 0; i < n && i < 16; i++) {
+                if (!logged) LOG("[tmp] FSR version available: %s\n", names[i] ? names[i] : "?");
+                if (want && !ov.versionId && names[i] && !strncmp(names[i], want, strlen(want))) ov.versionId = ids[i];
+            }
+            logged = 1;
+        }
+        if (ov.versionId) be.header.pNext = &ov.header;
+    }
     ffxReturnCode_t r = ffx_create(&fsr_ctx, &cd.header, NULL);
+    if (r != FFX_API_RETURN_OK) { be.header.type = FFX_API_CREATE_CONTEXT_DESC_TYPE_BACKEND_VK; r = ffx_create(&fsr_ctx, &cd.header, NULL); }
     if (r != FFX_API_RETURN_OK) { LOG("[tmp] FSR 3 context failed: %u\n", r); fsr_ctx = NULL; ffx_state = -1; return false; }
     fsr_w = ow; fsr_h = oh;
     struct ffxQueryGetProviderVersion pv = {.header = {.type = FFX_API_QUERY_DESC_TYPE_GET_PROVIDER_VERSION}};
@@ -496,6 +525,8 @@ static void mv_shot(VkCommandBuffer cb, uint32_t rw, uint32_t rh, const double r
     pend_seq = vk_pending_seq();
     pend_frame = f;
 }
+
+TexBackend *tmp_output(void) { return &img[3].b; }  // [XC3] the image tmp_upscale's view shows (exec.c xc3_tmp_upscale)
 
 VkImageView tmp_upscale(VkCommandBuffer cb, TexBackend *color, VkImageView color_view, TexBackend *depth, const TmpCamera *cam,
                         const float jitter[2], bool dm1, uint32_t ow, uint32_t oh) {

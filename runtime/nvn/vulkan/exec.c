@@ -5088,7 +5088,7 @@ static void tmp_draw(const Prog *pr, float *jx, float *jy) {
     if (!tmp_cam.ok)
         for (int k = 0; k < 14; k++) {
             const Range *u = &st.ubuf[0][k];
-            if (u->addr < HEAP_BASE || u->size < 176) continue;
+            if (u->addr < GUEST_LO || u->size < 176) continue;  // [XC3] (its buffers are in the alias region, below the heap)
             if (tmp_cam_check((const float *)(uintptr_t)u->addr, &tmp_cam)) { tmp_depth_tex = st.rt.depth; tmp_dm1 = pr->vkey.depth_minus_one; break; }
         }
     // (the same image: the game draws its prepass and colour passes through different texture objects over one depth)
@@ -5101,6 +5101,8 @@ static void tmp_draw(const Prog *pr, float *jx, float *jy) {
                                                           st.rt.depth->height == tmp_depth_tex->height));
     // [XCDE] T213: nothing after the frame's scene composite (the HUD draws with a depth buffer of the scene's size:
     // it was jittered too - the HUD shook once the HUD mask showed it unblended)
+    // [XC3] on top of the game's own 2-phase jitter (in its projection): 2 phases leave FSR a lattice of samples (a grid
+    // pattern over smooth areas); xc3_tmp_upscale passes FSR the sum
     if (scene && st.ds[0] && !nojit && !tmp_hud_started()) { *jx = tmp_jit[0]; *jy = tmp_jit[1]; tmp_scene_frame = fr; }
     if (getenv("XCDE_TMP_LOG")) {  // (debugging) per frame: draws jittered / scene draws not jittered (after the HUD began) / others
         static uint64_t fr; static int nj, nh, no, nl;
@@ -5110,6 +5112,66 @@ static void tmp_draw(const Prog *pr, float *jx, float *jy) {
         }
         if (scene && st.ds[0]) { if (tmp_hud_started()) nh++; else nj++; } else no++;
     }
+}
+
+// [XC3] FSR / DLSS in XC3's own place. The game renders its scene at half its output size (960x544 for 1920x1088 at
+// 1080p), runs its temporal AA there and upscales with a temporal pass of its own (fragment 0f74b2bf541a4af4: gTC /
+// gTCDash / gTP / gTPDash) into a target the HUD pass then draws over. The upscalers take that pass's place: its
+// inputs come from the TAA's first pass (fragment ab007e35fd08e550: gTCurHDRCalc = this frame's tonemapped colour at
+// sampler 0, gTVelocity = full per-pixel motion in UV units, RGB10A2 square-root coded, at 2, gTCurDepth at 3), the
+// camera from the G-buffer's vertex constants (tmp_cam_check: the same rows as XCDE's), the jitter from the game's own
+// projection (row 0 / 1 column 2 = its 2-phase +-1/4 pixel offset in NDC) plus ours (tmp_draw). The result is copied
+// into the game's target and its draw skipped; the HUD comes after. Names from /monolib/shader/shd_post.wishp (2026-10-29).
+static TexBackend *x3_color, *x3_depth;
+static uint64_t x3_frame = ~0ull;
+static NvnTexture *x3_tex(int unit) {
+    uint64_t h = st.tex[1][unit];
+    uint32_t tic = h & 0xFFFFF;
+    return h && st.tpool && tic < (uint32_t)st.tpool->count ? ((NvnTexEntry *)st.tpool->entries)[tic].tex : NULL;
+}
+static bool xc3_tmp_upscale(void) {
+    uint64_t fh = st.program->stages[1].code_hash;
+    if (fh == 0xab007e35fd08e550ull) {  // the TAA's first pass: its inputs
+        NvnTexture *c = x3_tex(0), *v = x3_tex(2), *d = x3_tex(3);
+        if (c && v && d && c->backend && v->backend && d->backend) {
+            x3_color = c->backend;
+            x3_depth = d->backend;
+            tmp_set_velocity((TexBackend *)v->backend);
+            x3_frame = renderer_present_count();
+        }
+        return false;
+    }
+    if (fh != 0x0f74b2bf541a4af4ull) return false;
+    NvnTexture *o = st.rt.color[0];
+    if (x3_frame != renderer_present_count() || !tmp_cam.ok || !o || !o->backend || !(x3_depth->aspect & VK_IMAGE_ASPECT_DEPTH_BIT))
+        return false;
+    TexBackend *out = o->backend;
+    // the game's jitter in render pixels (clip w = -view z: NDC x moves by -proj[2], y by -proj[6]; image rows top-down)
+    float jit[2] = {-tmp_cam.proj[2] * x3_color->width * 0.5f, tmp_cam.proj[6] * x3_color->height * 0.5f};
+    if (tmp_scene_frame == renderer_present_count()) jit[0] += tmp_jit[0], jit[1] += tmp_jit[1];  // (ours, tmp_draw)
+    vk_end_pass();
+    VkCommandBuffer cb = vk_cmd();
+    static const VkComponentMapping id = {0};
+    VkImageView cv = vk_image_view(x3_color, VK_IMAGE_VIEW_TYPE_2D, x3_color->format, 0, 1, 0, 1, id, VK_IMAGE_ASPECT_COLOR_BIT);
+    // the camera without the game's jitter: with it, the reprojection carried the jitter's change between frames into
+    // the camera motion (half a pixel on the sky, which has no game velocity) and FSR dropped its history there
+    TmpCamera cam = tmp_cam;
+    for (int j = 0; j < 4; j++) cam.viewproj[j] -= cam.proj[2] * cam.view[8 + j], cam.viewproj[4 + j] -= cam.proj[6] * cam.view[8 + j];
+    cam.proj[2] = cam.proj[6] = 0;
+    VkImageView r = tmp_upscale(cb, x3_color, cv, x3_depth, &cam, jit, tmp_dm1, out->width, out->height);
+    st.rt_dirty = true;
+    if (!r) return false;  // (the game's own upscale then)
+    TexBackend *res = tmp_output();
+    vk_full_barrier(cb);
+    VkImageCopy c = {.srcSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1}, .dstSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1},
+                     .extent = {out->width, out->height, 1}};
+    vkCmdCopyImage(cb, res->image, VK_IMAGE_LAYOUT_GENERAL, out->image, VK_IMAGE_LAYOUT_GENERAL, 1, &c);
+    vk_full_barrier(cb);
+    {   static int nl;
+        if (getenv("XCDE_TMP_LOG") && nl++ < 20)
+            LOG("[tmp] XC3: %ux%u -> %ux%u, jitter %.3f %.3f\n", x3_color->width, x3_color->height, out->width, out->height, jit[0], jit[1]);
+    }
+    return true;
 }
 
 // [XCDE] T181: save / load list thumbnails. Each slot's image is drawn into its 320x180 target by fragment program
@@ -5664,6 +5726,7 @@ static void draw_(CmdRec *r, bool indexed) {
     }
     float jx = 0, jy = 0;
     if (tmp_enabled()) tmp_draw(pr, &jx, &jy);  // [XCDE] temporal upscaling: the camera, the scene depth, jitter
+    if (tmp_enabled() && xc3_tmp_upscale()) return;  // [XC3] FSR / DLSS instead of the game's own upscale draw
     if (tmp_enabled()) {  // [XCDE] T215: the game's velocity buffer (gTVelocity of its temporal AA / AO / shadow passes)
         // read at the gTVelocity unit of the game's own readers, found by their code hashes (container names,
         // tools/spch_attrs.py + the SPCH layout). Written in the G-buffer pass, also with the game's AA off.
@@ -6512,7 +6575,7 @@ static VkImageView post_process(VkCommandBuffer cb, TexBackend *b, double ow_d, 
     bool fsr = g_settings.upscaler == UPSCALE_FSR1 && (ow > b->width + 1 || oh > b->height + 1);  // (an upscale only)
     extern void vk_frame_suspend(void);
     extern void vk_frame_resume(void);
-    if (tmp_enabled()) {  // [XCDE] FSR 3 / DLSS (temporal.c); without this frame's camera: FSR 1 as the upscaler
+    if (tmp_enabled() && false) {  // [XCDE] FSR 3 / DLSS (temporal.c); [XC3] done in the frame instead (xc3_tmp_upscale)
         bool cam = tmp_cam.ok && tmp_frame == renderer_present_count() && tmp_depth_tex && tmp_depth_tex->backend;
         vk_frame_suspend();
         VkImageView t = tmp_upscale(cb, b, v, cam ? (TexBackend *)tmp_depth_tex->backend : NULL, cam ? &tmp_cam : NULL, tmp_jit,
