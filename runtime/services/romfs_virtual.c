@@ -107,7 +107,7 @@ static void maybe_edit(File *f) {
     settings_load();  // (the romfs may be scanned before the window reads it; reading it twice is harmless)
     if (!g_settings.game_blur) strcat(edits, "AntiAliasing=off,tmaa=off,blur2=off,furBlur=off");
     // [XCDE] FSR 3 / DLSS replace the game's own anti-aliasing (its temporal AA would blur their jittered input)
-    else if (g_settings.upscaler == UPSCALE_FSR3 || g_settings.upscaler == UPSCALE_DLSS) strcat(edits, "AntiAliasing=off,tmaa=off");
+    else if (UPSCALE_TEMPORAL(g_settings.upscaler)) strcat(edits, "AntiAliasing=off,tmaa=off");
     const char *e = getenv("XCDE_LIBNX");
     if (e && *e) { if (*edits) strcat(edits, ","); strncat(edits, e, sizeof edits - strlen(edits) - 1); }
     if (*edits) edit_ini(f, edits);

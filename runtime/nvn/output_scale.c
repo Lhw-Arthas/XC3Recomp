@@ -89,7 +89,7 @@ void output_scale(double dw, double dh, bool reshape_allowed, double now, double
         // [XCDE] temporal upscalers (FSR 3 / DLSS): Match display at the quality mode's render size
         // [XC3] not for XC3: its scene is already rendered at half its output size and FSR / DLSS replace its own
         // upscale (exec.c xc3_tmp_upscale) at that size - a lower render scale would only shrink both
-        else if (false && mode == RES_MATCH && (g_settings.upscaler == UPSCALE_FSR3 || g_settings.upscaler == UPSCALE_DLSS)) {
+        else if (false && mode == RES_MATCH && UPSCALE_TEMPORAL(g_settings.upscaler)) {
             static const double ratio[] = {1.0, 1.5, 1.7, 2.0, 3.0};
             int q = g_settings.upscale_quality;
             h /= ratio[q >= 0 && q <= 4 ? q : 1];

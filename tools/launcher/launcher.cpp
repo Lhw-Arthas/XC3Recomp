@@ -88,7 +88,7 @@ struct Cfg {
     bool fullscreen = false;
     int win = DEF_WIN;      // index into k_wins
     int res = 0;            // index into k_res
-    int upscaler = 1;       // 0 bilinear, 1 FSR 1, 2 FSR 3.1, 3 DLSS
+    int upscaler = 1;       // 0 bilinear, 1 FSR 1, 2 FSR 3.1, 3 DLSS, 4 FSR 4 ([XC3])
     int uquality = 1;       // FSR 3 / DLSS: 0 native AA, 1 quality, 2 balanced, 3 performance, 4 ultra performance
     bool frame_gen = false;
     bool smaa = false;
@@ -131,7 +131,7 @@ static int icons_effective(int sel) {
     return t == SDL_GAMEPAD_TYPE_XBOX360 || t == SDL_GAMEPAD_TYPE_XBOXONE ? 2 :
            t == SDL_GAMEPAD_TYPE_PS3 || t == SDL_GAMEPAD_TYPE_PS4 || t == SDL_GAMEPAD_TYPE_PS5 ? 3 : 1;
 }
-static const char *const k_ups_ini[] = {"bilinear", "fsr", "fsr3", "dlss"};
+static const char *const k_ups_ini[] = {"bilinear", "fsr", "fsr3", "dlss", "fsr4"};
 static const char *const k_uq_ini[] = {"native", "quality", "balanced", "performance", "ultra"};
 static const char *const k_wins[] = {"1280x720", "1600x900", "1920x1080", "2560x1440", "3840x2160"};
 static const char *const k_res_ini[] = {"match", "1", "2", "3", "75%", "50%", "dynamic"};
@@ -191,6 +191,17 @@ static const char *const k_en[][2] = {
     {"Bilineal (suave)", "Bilinear (soft)"}, {"AMD FSR 1.0 (nítido)", "AMD FSR 1.0 (sharp)"},
     {"AMD FSR 3.1 (temporal, cualquier GPU)", "AMD FSR 3.1 (temporal, any GPU)"},
     {"NVIDIA DLSS (temporal, GPU RTX)", "NVIDIA DLSS (temporal, RTX GPU)"}, {"Escalado / antialiasing", "Upscaling / anti-aliasing"},
+    {"AMD FSR 4 (temporal, GPU RDNA 4)", "AMD FSR 4 (temporal, RDNA 4 GPU)"},
+    {"FSR 1.0: escalado espacial, solo cuando la resolución interna es menor que la ventana.\n"
+     "FSR 3.1, FSR 4 y DLSS: reconstrucción temporal - sustituyen al escalado del propio juego (que\n"
+     "renderiza a la mitad del tamaño de la ventana) y reconstruyen la imagen con varios frames.\n"
+     "FSR 4 necesita una GPU AMD RDNA 4 (Radeon RX 9000); en otras se usa FSR 3.1.\n"
+     "DLSS necesita una GPU NVIDIA RTX; si no está disponible se usa FSR 3.1.",
+     "FSR 1.0: spatial upscaling, only when the internal resolution is below the window.\n"
+     "FSR 3.1, FSR 4 and DLSS: temporal reconstruction - they replace the game's own upscaling (it\n"
+     "renders at half the window's size) and rebuild the image from several frames.\n"
+     "FSR 4 needs an AMD RDNA 4 GPU (Radeon RX 9000); on others FSR 3.1 is used.\n"
+     "DLSS needs an NVIDIA RTX GPU; without one, FSR 3.1 is used."},
     {"FSR 1.0: escalado espacial, solo cuando la resolución interna es menor que la ventana.\n"
      "FSR 3.1 y DLSS: reconstrucción temporal - renderizan a menos resolución (según la calidad)\n"
      "y reconstruyen la imagen de la ventana con varios frames: más FPS y bordes sin dientes.\n"
@@ -385,7 +396,7 @@ static void load() {
         if (!strcmp(k, "fullscreen")) g.fullscreen = atoi(v) != 0;
         else if (!strcmp(k, "window") && (i = find(k_wins, 5, v)) >= 0) g.win = i;
         else if (!strcmp(k, "resolution") && (i = find(k_res_ini, 7, v)) >= 0) g.res = i;
-        else if (!strcmp(k, "upscaler")) g.upscaler = !strcmp(v, "fsr") ? 1 : !strcmp(v, "fsr3") ? 2 : !strcmp(v, "dlss") ? 3 : 0;
+        else if (!strcmp(k, "upscaler")) g.upscaler = !strcmp(v, "fsr") ? 1 : !strcmp(v, "fsr3") ? 2 : !strcmp(v, "dlss") ? 3 : !strcmp(v, "fsr4") ? 4 : 0;
         else if (!strcmp(k, "upscale_quality") && (i = find(k_uq_ini, 5, v)) >= 0) g.uquality = i;
         else if (!strcmp(k, "frame_gen")) g.frame_gen = atoi(v) != 0;
         else if (!strcmp(k, "antialias")) g.smaa = !strcmp(v, "smaa");
@@ -425,6 +436,9 @@ static bool save() {
     fprintf(f, "# " APP_NAME " settings (written by the launcher)\n");
     fprintf(f, "fullscreen = %d\nwindow = %s\nresolution = %s\nupscaler = %s\nantialias = %s\nshow_fps = %d\n", g.fullscreen,
             k_wins[g.win], k_res_ini[g.res], k_ups_ini[g.upscaler], g.smaa ? "smaa" : "off", g.show_fps);
+#ifndef GAME_XCDE
+    g.frame_gen = g.cut_fg = false;  // [XC3] not offered (see the upscaler options)
+#endif
     fprintf(f, "upscale_quality = %s\nframe_gen = %d\n", k_uq_ini[g.uquality], g.frame_gen);
     fprintf(f, "depth_of_field = %d\n", g.dof);
     fprintf(f, "game_blur = %d\n", g.game_blur);
@@ -690,6 +704,20 @@ static void tab_graphics() {
     ImGui::SetNextItemWidth(360 * g_scale);
     ImGui::Combo(T("Resolución interna"), &g.res, TL(k_res_ui, 7).p, 7);
     ImGui::TextDisabled(T(RES_HINT));
+#ifndef GAME_XCDE
+    // [XC3] FSR 4 too; the temporal upscalers replace the game's own (half-size) upscale, so no quality mode (the render
+    // size is the game's) and no frame generation (not ported to FidelityFX SDK 2.x)
+    const char *ups[] = {"Bilineal (suave)", "AMD FSR 1.0 (nítido)", "AMD FSR 3.1 (temporal, cualquier GPU)",
+                         "NVIDIA DLSS (temporal, GPU RTX)", "AMD FSR 4 (temporal, GPU RDNA 4)"};
+    ImGui::SetNextItemWidth(320 * g_scale);
+    ImGui::Combo(T("Escalado / antialiasing"), &g.upscaler, TL(ups, 5).p, 5);
+    ImGui::SetItemTooltip(T("FSR 1.0: escalado espacial, solo cuando la resolución interna es menor que la ventana.\n"
+                          "FSR 3.1, FSR 4 y DLSS: reconstrucción temporal - sustituyen al escalado del propio juego (que\n"
+                          "renderiza a la mitad del tamaño de la ventana) y reconstruyen la imagen con varios frames.\n"
+                          "FSR 4 necesita una GPU AMD RDNA 4 (Radeon RX 9000); en otras se usa FSR 3.1.\n"
+                          "DLSS necesita una GPU NVIDIA RTX; si no está disponible se usa FSR 3.1."));
+    if (false) {
+#else
     const char *ups[] = {"Bilineal (suave)", "AMD FSR 1.0 (nítido)", "AMD FSR 3.1 (temporal, cualquier GPU)",
                          "NVIDIA DLSS (temporal, GPU RTX)"};
     ImGui::SetNextItemWidth(320 * g_scale);
@@ -700,6 +728,7 @@ static void tab_graphics() {
                           "Sustituyen al antialiasing temporal del juego. DLSS necesita una GPU NVIDIA RTX; si no\n"
                           "está disponible se usa FSR 3.1."));
     if (g.upscaler >= 2) {
+#endif
         const char *uq[] = {"Nativo (solo antialiasing: DLAA / FSR Native AA)", "Calidad (67 %)", "Equilibrado (59 %)",
                             "Rendimiento (50 %)", "Ultra rendimiento (33 %)"};
         ImGui::SetNextItemWidth(320 * g_scale);
@@ -716,7 +745,7 @@ static void tab_graphics() {
         ImGui::SetItemTooltip(T("El juego va a tus FPS sin generación de frames; en las cinemáticas (donde el juego anima a\n"
                               "los personajes a 30) baja a 30 parejos y la generación las lleva a 60 en pantalla.\n"
                               "Pensado para jugar a 60 en un monitor de 60 Hz. Se aplica al iniciar el juego."));
-    } else {
+    } else if (g.upscaler < 2) {  // ([XC3] the temporal ones: nothing more)
         ImGui::TextDisabled(T("Se aplica cuando la resolución interna es menor que la ventana."));
     }
     ImGui::SeparatorText(T("Calidad"));

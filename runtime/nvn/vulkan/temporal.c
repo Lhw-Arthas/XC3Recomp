@@ -76,7 +76,7 @@ bool tmp_enabled(void) {
         on = 0;
         if (env_int("XCDE_TMP_OFF")) return false;
         if (diag_deterministic() && !env_int("XCDE_TMP_DETERMINISTIC")) return false;  // (captures stay comparable)
-        if (g_settings.upscaler == UPSCALE_FSR3) on = ffx_load();
+        if (g_settings.upscaler == UPSCALE_FSR3 || g_settings.upscaler == UPSCALE_FSR4) on = ffx_load();
         else if (g_settings.upscaler == UPSCALE_DLSS) {
             extern bool dlss_available(void);
             on = dlss_available() ? 2 : ffx_load();  // (no RTX GPU / runtime: FSR 3 instead)
@@ -390,8 +390,14 @@ static PFN_vkVoidFunction VKAPI_PTR ffx_proc(VkDevice d, const char *name) {
     }
     return f;
 }
+// [XC3] the FSR version the settings ask for: upscaler = fsr4 -> "4" (RDNA 4), else "3.1"; XC3_FSR_VERSION=<text> (tests)
+static const char *fsr_wanted(void) {
+    const char *e = getenv("XC3_FSR_VERSION");
+    return e && *e ? e : g_settings.upscaler == UPSCALE_FSR4 ? "4" : "3.1";
+}
+static const char *fsr_want;  // (the version fsr_ctx was made for: changed in the F1 menu -> made again)
 static bool fsr_context(uint32_t ow, uint32_t oh) {
-    if (fsr_ctx && fsr_w == ow && fsr_h == oh) return true;
+    if (fsr_ctx && fsr_w == ow && fsr_h == oh && fsr_want == fsr_wanted()) return true;
     if (fsr_ctx) { vkDeviceWaitIdle(g_vk.dev); ffx_destroy(&fsr_ctx, NULL); fsr_ctx = NULL; }
     struct ffxCreateBackendVKDesc be = {.header = {.type = FFX_API_CREATE_CONTEXT_DESC_TYPE_BACKEND_VK},
                                         .vkDevice = g_vk.dev, .vkPhysicalDevice = g_vk.phys, .vkDeviceProcAddr = ffx_proc};
@@ -403,8 +409,9 @@ static bool fsr_context(uint32_t ow, uint32_t oh) {
     // [XC3] FSR SDK 2.x: the Vulkan backend description has a new type id (backend VK sub-id 3, same fields); the 1.1.4
     // id (3) is its _DEPRECATED form - tried second
     be.header.type = 0x01000003u;
-    // [XC3] the upscaler version (SDK 2.x: FSR 3.1 and FSR 4 in amd_fidelityfx_upscaler_vk.dll; the newest the GPU runs
-    // by default): XC3_FSR_VERSION=<text> picks the first version whose name starts with it ("3.1", "4")
+    // [XC3] the upscaler version (SDK 2.x: FSR 3.1 and FSR 4 in amd_fidelityfx_upscaler_vk.dll; it lists only the
+    // versions this GPU runs and would take the newest): the first whose name starts with fsr_wanted(); FSR 4 missing
+    // (not RDNA 4) -> 3.1
     struct { ffxApiHeader header; uint64_t versionId; } ov = {{5u /* FFX_API_DESC_TYPE_OVERRIDE_VERSION */, NULL}, 0};
     {
         struct { VkDevice d; VkPhysicalDevice p; PFN_vkGetDeviceProcAddr f; } dc = {g_vk.dev, g_vk.phys, ffx_proc};
@@ -413,20 +420,23 @@ static bool fsr_context(uint32_t ow, uint32_t oh) {
         struct { ffxQueryDescHeader header; uint64_t createDescType; void *device; uint64_t *outputCount; uint64_t *versionIds;
                  const char **versionNames; } q = {{4u /* FFX_API_QUERY_DESC_TYPE_GET_VERSIONS */, NULL}, FFX_API_CREATE_CONTEXT_DESC_TYPE_UPSCALE,
                                                    &dc, &n, ids, names};
-        const char *want = getenv("XC3_FSR_VERSION");
+        fsr_want = fsr_wanted();
         if (ffx_query(NULL, &q.header) == FFX_API_RETURN_OK) {
             static int logged;
-            for (uint64_t i = 0; i < n && i < 16; i++) {
-                if (!logged) LOG("[tmp] FSR version available: %s\n", names[i] ? names[i] : "?");
-                if (want && !ov.versionId && names[i] && !strncmp(names[i], want, strlen(want))) ov.versionId = ids[i];
-            }
+            if (!logged) for (uint64_t i = 0; i < n && i < 16; i++) LOG("[tmp] FSR version available: %s\n", names[i] ? names[i] : "?");
             logged = 1;
+            for (int pass = 0; pass < 2 && !ov.versionId; pass++) {
+                const char *want = pass ? "3.1" : fsr_want;
+                for (uint64_t i = 0; i < n && i < 16 && !ov.versionId; i++)
+                    if (names[i] && !strncmp(names[i], want, strlen(want))) ov.versionId = ids[i];
+                if (!pass && !ov.versionId) LOG("[tmp] FSR %s not available on this GPU: FSR 3.1 instead\n", fsr_want);
+            }
         }
         if (ov.versionId) be.header.pNext = &ov.header;
     }
     ffxReturnCode_t r = ffx_create(&fsr_ctx, &cd.header, NULL);
     if (r != FFX_API_RETURN_OK) { be.header.type = FFX_API_CREATE_CONTEXT_DESC_TYPE_BACKEND_VK; r = ffx_create(&fsr_ctx, &cd.header, NULL); }
-    if (r != FFX_API_RETURN_OK) { LOG("[tmp] FSR 3 context failed: %u\n", r); fsr_ctx = NULL; ffx_state = -1; return false; }
+    if (r != FFX_API_RETURN_OK) { LOG("[tmp] FSR context failed: %u\n", r); fsr_ctx = NULL; ffx_state = -1; return false; }
     fsr_w = ow; fsr_h = oh;
     struct ffxQueryGetProviderVersion pv = {.header = {.type = FFX_API_QUERY_DESC_TYPE_GET_PROVIDER_VERSION}};
     ffx_query(&fsr_ctx, &pv.header);
