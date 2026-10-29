@@ -125,7 +125,7 @@ static void test_tld4_mask_selects_components(void) {
 static void test_tld4_offsets_and_ptp(void) {
     ShaderInfo *a = translate(tld4(0, 34, 8, 22, 0, 1, 0, 1, 15));  // AOFFI: offset in gpr20
     CHECK(a && a->msl);
-    if (a && a->msl) CHECK(strstr(a->msl, "<< 28") != NULL);
+    if (a && a->msl) CHECK(strstr(a->msl, "r8 << 26) >> 26") != NULL);  // [XC3] signed 6-bit fields (gather offsets, not TEX's 4-bit)
     if (a) maxwell_free(a);
     ShaderInfo *b = translate(tld4(0, 34, 8, 22, 0, 2, 0, 1, 15));  // PTP: translated without the per-texel offsets
     CHECK(b && b->msl);

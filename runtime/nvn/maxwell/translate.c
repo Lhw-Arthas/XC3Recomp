@@ -950,21 +950,39 @@ static void emit_texs(Ctx *c, uint64_t w, bool fetch) {
     write_tex_result(c, slot, call, mask, d0, d1, true, !bits(w, 59, 1));  // 0xd0/0xd2: .F16 results
 }
 
+// [XC3] A texture gather's AOFFI offset from register r: signed 6-bit x / y at bits 0 / 8 (yuzu shader_recompiler
+// texture_gather.cpp MakeOffset) - not TEX's 4-bit fields
+static void tld4_offset(Ctx *c, int r, char *out) {
+    c->reg_used[r] = 1;
+    sprintf(out, "int2(int(r%d << 26) >> 26, int(r%d << 18) >> 26)", r, r);
+}
+
 // TLD4S: texture gather ("S" form: 2D only, coordinates in gpr8 / gpr20, results in gpr0 / gpr28 like TEXS).  [XCDE]
 // Fields: texture index 36..48, nodep 49 (no scoreboard effect: ignored), dc 50, aoffi 51, component 52..53,
-// fp16 55 (results packed as half pairs). GLSL only; the depth-compare and offset forms fail cleanly until needed.
+// fp16 55 (results packed as half pairs). GLSL only; the depth-compare form fails cleanly until needed.
+// [XC3] AOFFI (a post effect of XC3's shd_post.wishp): coordinates in gpr8 / gpr8+1, the offset in gpr20 - signed 6-bit
+// x / y at bits 0 / 8 (yuzu shader_recompiler texture_gather_swizzled.cpp), applied as TLD4's (tld4_offset).
 static void emit_tld4s(Ctx *c, uint64_t w) {
     int d0 = (int)bits(w, 0, 8), a = (int)bits(w, 8, 8), b = (int)bits(w, 20, 8), d1 = (int)bits(w, 28, 8);
     uint32_t index = (uint32_t)bits(w, 36, 13);
     bool dc = bits(w, 50, 1), aoffi = bits(w, 51, 1), f16 = bits(w, 55, 1);
     int comp = (int)bits(w, 52, 2);
     if (!c->glsl) { fail(c, "tld4s (msl)"); return; }
-    if (dc || aoffi) { fail(c, "tld4s %s%s", dc ? "dc " : "", aoffi ? "aoffi" : ""); return; }
-    char ra[16], rb[16];
-    const char *A = reg(c, a, ra), *Bv = reg(c, b, rb);
+    if (dc) { fail(c, "tld4s dc%s", aoffi ? " aoffi" : ""); return; }
     int slot = tex_slot(c, index, TEXTYPE_2D, false, false);
-    char call[512];
-    sprintf(call, "textureGather(t%d, vec2(as_type<float>(%s), as_type<float>(%s)), %d)", slot, A, Bv, comp);
+    char ra[16], rb[16], uv[512], call[768];
+    if (aoffi) {
+        char x[48], y[48], off[96];
+        sprintf(x, "as_type<float>(r%d)", a);
+        sprintf(y, "as_type<float>(r%d)", a + 1);
+        c->reg_used[a] = 1;
+        c->reg_used[a + 1] = 1;
+        tld4_offset(c, b, off);
+        sprintf(uv, "(vec2(%s, %s) + vec2(%s) / vec2(tsize%d(0).xy))", x, y, off, slot);
+    } else {
+        sprintf(uv, "vec2(as_type<float>(%s), as_type<float>(%s))", reg(c, a, ra), reg(c, b, rb));
+    }
+    sprintf(call, "textureGather(t%d, %s, %d)", slot, uv, comp);
     write_tex_result(c, slot, call, 0xF, d0, d1, true, f16);
 }
 
@@ -989,8 +1007,7 @@ static void emit_tld4(Ctx *c, uint64_t w) {
     c->reg_used[a + 1] = 1;
     int pr = b;
     if (offmode == 1) {
-        c->reg_used[pr] = 1;
-        sprintf(off, "int2(int(r%d << 28) >> 28, int(r%d << 24) >> 28)", pr, pr);
+        tld4_offset(c, pr, off);  // [XC3] (6-bit fields: they were read as TEX's 4-bit ones)
         pr++;
     } else if (offmode == 2) {
         c->reg_used[pr] = 1;
