@@ -1137,6 +1137,7 @@ void backend_present(NvnTexture *t) {
     total_frames++;
     g_frame_counter++;
     diag_frame_tick(total_frames);
+    { extern void xc3_fps_frame(void); xc3_fps_frame(); }  // [XC3] 60 fps (runtime/hle/framepace.c)
     extern void vk_pace_frame(void);
     vk_pace_frame();  // (exec.c: the game's 30 fps mode when frames don't fit 60)
     extern void input_frame(uint64_t frame);
