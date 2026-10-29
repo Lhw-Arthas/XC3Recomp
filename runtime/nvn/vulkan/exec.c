@@ -949,7 +949,8 @@ static Job *take_job(Job **head, Job **tail, pthread_mutex_t *lk, void *arg) {
     return j;
 }
 static uint64_t g_last_wait_ns;  // (the last wait_ready that waited: build-wait log)
-static bool wait_ready(_Atomic int *state, void *arg) {
+// max_ns: [XC3] at most that long (0: until built), and the job is left to its worker instead of run here
+static bool wait_ready(_Atomic int *state, void *arg, uint64_t max_ns) {
     static int skip = -1;
     if (skip < 0) skip = getenv("LARECOMP_ASYNC_SKIP") != NULL;
     g_last_wait_ns = 0;
@@ -958,6 +959,11 @@ static bool wait_ready(_Atomic int *state, void *arg) {
     const char *was = g_rq_where;
     vk_rq_at("waiting for a shader / pipeline build");
     while (atomic_load(state) == 0) {
+        if (max_ns) {
+            if (SDL_GetTicksNS() - t0 >= max_ns) break;
+            sched_yield();
+            continue;
+        }
         Job *j = take_job(&tjobs_head, &tjobs_tail, &tjobs_lock, arg);
         bool xl = j != NULL;
         if (!j && (j = take_job(&jobs_head, &jobs_tail, &jobs_lock, arg))) atomic_fetch_sub(&g_jobs_queued, 1);
@@ -2292,7 +2298,8 @@ typedef struct {
 typedef struct {
     PipeKey k; uint64_t hash; VkPipeline pipe; _Atomic int state;  // state: 0 building, 1 ready, 2 failed
     uint64_t t_new, t_b0, t_b1;  // [XCDE] build-wait log: asked for / build started / ended (ns)
-    uint8_t how, libs_new;       // 1 whole from the disk cache, 2 linked, 3 whole compile; libraries built for it (bit = kind)
+    uint8_t how, libs_new, gave_up;  // gave_up: [XC3] a draw stopped waiting for it (wait_ready max_ns)
+                                 // how: 1 whole from the disk cache, 2 linked, 3 whole compile; libraries built for it (bit = kind)
                                  // (how: + 0x80 prewarmed, + 0x40 its optimized pipeline waits for its first draw - T218)
     _Atomic int jobs;            // [XCDE] build / optimize jobs queued for it (eviction leaves it alone meanwhile)
     uint64_t last_used;          // [XCDE] frame of its last draw (eviction: the least recently drawn go first)
@@ -5201,7 +5208,7 @@ static void draw_(CmdRec *r, bool indexed) {
     }
     { uint32_t m = (uint32_t)r->x[0]; g_draw_gs_in = m == 0 ? 1 : (m <= 3 || m == 0xa || m == 0xb) ? 2 : 3; }  // [XCDE] NVN draw mode -> GS input
     Prog *pr = get_program(st.program, &vkey, &fkey);
-    bool pr_ok = pr && wait_ready(&pr->state, pr);
+    bool pr_ok = pr && wait_ready(&pr->state, pr, 0);
     if (pr && g_last_wait_ns > build_wait_min()) build_wait_log(pr, NULL, g_last_wait_ns);
     if (!pr_ok) {
         static int nlog_;
@@ -5443,7 +5450,31 @@ static void draw_(CmdRec *r, bool indexed) {
         stat_pipe_rebuilt++;
     }
     pp->last_used = renderer_present_count();
-    bool pp_ok = wait_ready(&pp->state, pp);
+    uint64_t pp_max = 0;
+#ifndef GAME_XCDE
+    // [XC3] Programs with a geometry stage are XC3's shadow pass (a model's vertex shader with the shared cascade
+    // geometry shader): AMD's driver compiled each of these pipelines in 6-9 s at its first draw, and waiting for them
+    // stopped the game for 22 s at the first battle (shader precompilation does not reach this compile). Such a draw
+    // waits at most XC3_GS_WAIT_MS (default 50; 0: always wait, as other draws), then the model casts no shadow until
+    // its pipeline is built; later draws don't wait at all until then (Pipe.gave_up).
+    if ((st.program->stage_mask & 4) && st.program->stages[2].code_addr) {
+        static int64_t gs_wait_ms = -1;
+        if (gs_wait_ms < 0) gs_wait_ms = getenv("XC3_GS_WAIT_MS") ? atoll(getenv("XC3_GS_WAIT_MS")) : 50;
+        if (gs_wait_ms > 0) pp_max = pp->gave_up ? 1 : (uint64_t)gs_wait_ms * 1000000ull;
+    }
+#endif
+    bool pp_ok = wait_ready(&pp->state, pp, pp_max);
+#ifndef GAME_XCDE
+    if (!pp_ok && pp_max && atomic_load(&pp->state) == 0) {
+        if (!pp->gave_up) {
+            static int nl;
+            if (nl++ < 100) LOG("[vk] shadow pipeline not built yet: drawn without it until it is (vs %llx gs %llx)%c",
+                                (unsigned long long)st.program->stages[0].code_addr, (unsigned long long)st.program->stages[2].code_addr, 10);
+            pp->gave_up = 1;
+        }
+        SKIPPED(); return;
+    }
+#endif
     if (g_last_wait_ns > build_wait_min()) build_wait_log(NULL, pp, g_last_wait_ns);
     if ((pp->how & 0x40) && gpl_optimize_on()) { pp->how &= ~0x40; atomic_fetch_add(&pp->jobs, 1); run_job_low(gpl_optimize, pp); }  // [XCDE] T218: a prelinked pipeline's first draw
     if (!pp_ok) {
