@@ -23,3 +23,6 @@ reports/
 sdk/
 saves/
 ref/
+
+# graphify code graph (local, rebuilt with: .venv/Scripts/graphify update .)
+graphify-out/

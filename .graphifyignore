@@ -1,0 +1,2 @@
+# graphify: vendored libraries (imgui, VMA, SMAA, ...) are not this project's code
+third_party/
