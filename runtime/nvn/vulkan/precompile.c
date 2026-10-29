@@ -37,6 +37,9 @@
 #include <time.h>
 #include <unistd.h>
 #include <zlib.h>
+#ifndef GAME_XCDE
+#include <zstd.h>  // [XC3] bf3.ard blocks
+#endif
 
 #include "../../rt.h"
 #include "shaders.h"
@@ -60,8 +63,10 @@ typedef struct {
     uint32_t int_in;     // [XCDE] T211 vertex: input locations named as integers in the container (n*: nWgtIdx);
                          // fragment: texture units named as stencil (gTStencil / gTCurStencil / gTPrevStencil)
     bool named;          // the container named its inputs (int_in is known, also when 0)
+    uint32_t blob;       // [XC3] code blob size
+    bool arc;            // [XC3] from an ARC (.wipac / .wi) entry, not an SPCH container
 } Found;
-typedef struct { uint32_t vs, fs; } Pair;  // indices into found (fs = UINT32_MAX: a vertex shader alone)
+typedef struct { uint32_t vs, fs, gs1; } Pair;  // indices into found (fs = UINT32_MAX: a vertex shader alone; gs1: geometry + 1)
 static Found *found;
 static size_t nfound, capfound;
 static Pair *progs;
@@ -106,21 +111,23 @@ static uint32_t add_shader(const uint8_t *code, uint32_t blob, uint32_t coff, ui
     if (v) return v - 1;
     if (nfound == capfound) found = realloc(found, (capfound = capfound ? capfound * 2 : 4096) * sizeof *found);
     Found *f = &found[nfound];
-    f->hash = h; f->stage = stage; f->coff = coff; f->csz = csz;
+    f->hash = h; f->stage = stage; f->coff = coff; f->csz = csz; f->blob = blob; f->arc = false;
     uint32_t lim = coff ? coff : 0x10000, sz = lim > blob ? lim : blob;
     f->code = calloc(1, sz);
     memcpy(f->code, code, blob);
     map_put(&shader_map, h, (uint32_t)nfound + 1);
     return (uint32_t)nfound++;
 }
-static void add_prog(uint32_t vs, uint32_t fs) {
+static void add_prog_gs(uint32_t vs, uint32_t gs1, uint32_t fs) {
     uint64_t h = found[vs].hash * 0x9E3779B97F4A7C15ull ^ (fs == UINT32_MAX ? 0x5555 : found[fs].hash);
+    if (gs1) h = (h ^ found[gs1 - 1].hash) * 0x100000001B3ull;
     if (map_get(&prog_map, h)) return;
     if (nprogs == capprogs) progs = realloc(progs, (capprogs = capprogs ? capprogs * 2 : 4096) * sizeof *progs);
-    progs[nprogs++] = (Pair){vs, fs};
+    progs[nprogs++] = (Pair){vs, fs, gs1};
     map_put(&prog_map, h, 1);
     pthread_cond_signal(&fcond);
 }
+static void add_prog(uint32_t vs, uint32_t fs) { add_prog_gs(vs, 0, fs); }
 
 // [XCDE] T211: each program's vertex input names (container program data, the layout of ScanMountGoat/xc3_lib's
 // public description of SPCH, tools/spch_attrs.py): which locations the game declares as integers. Monolith names
@@ -290,6 +297,149 @@ static void list_dir(const char *dir) {
 static int path_rank(const char *p) { return strstr(p, "/monolib/") ? 0 : strstr(p, ".wishp") ? 1 : 2; }
 static int path_cmp(const void *a, const void *b) { return path_rank(*(char *const *)a) - path_rank(*(char *const *)b); }
 
+#ifndef GAME_XCDE
+// [XC3] Xenoblade 3 keeps its whole RomFS in one archive, romfs/bf3.ard (the index bf3.arh is not read here): 85,105
+// xbc1 blocks (type 1 zlib, type 3 zstd), 16-byte aligned. Shaders are in three forms inside the blocks:
+//  - SPCH containers ("HCPS", as XCDE's: scan_buf), ~32,000 vertex + 32,000 fragment shaders;
+//  - ARC archive entries (.wipac / .wi, "ARC\0" ... "FirehawkAssetArchive"): an NVN control section with its code blob
+//    right after it (+0x880), stored as is (cmn_assets.wipac: 1,378) or
+//  - inside zlib streams in those entries (the game inflates them itself, inflate_fast at main+0x1139ff0): 39,597
+//    streams, the shader at +0x758 of each. Measured (2026-10-29): 707 distinct vertex, 302 geometry, 4,312 fragment
+//    shaders in the last two forms - among them every vertex / geometry shader of the slow shadow-pass pipelines.
+// Vertex shaders from ARC entries are translated alone, the large ones also as XC3's shadow pass draws them
+// (ard_shadow_programs). Only to SPIR-V by default: on the AMD driver measured (RX 9060 XT, 2026-10-29) the pipeline
+// libraries the precompilation built did not spare the game a single compile - with the same SPIR-V and the same disk
+// cache file, each of the shadow pipelines still took 6-9 s at its first draw (a 22 s stall at the first battle), and
+// a second run was fast: the expensive compile is the linked pipeline with the draw's own state, which only the game's
+// draws key. 40 min of library builds for nothing; SPIR-V alone takes ~3 min (XCDE_PRECOMPILE_LIBS=1: libraries too).
+static uint64_t *ard_blocks;
+static size_t nblocks;
+static char ard_path[1024];
+static _Atomic size_t next_block;
+
+static void scan_arc(const uint8_t *d, size_t n) {
+    for (size_t c = 0; c + 0x880 + 0x80 <= n; c += 4) {
+        if (rd32(d + c) != 0x98761234u || rd32(d + c + 0x880) != 0x12345678u) continue;
+        uint32_t csz = rd32(d + c + 0x6FC), coff = rd32(d + c + 0x700), blob = rd32(d + c + 0x704);
+        size_t t = c + 0x880;
+        if (!blob || blob > (4u << 20) || t + blob > n) continue;
+        uint64_t end = (uint64_t)coff + csz, h = 0xcbf29ce484222325ull;  // (objects.c set_shaders)
+        if (end < 0x30 || end > (4u << 20)) end = 0x800;
+        if (t + end > n) continue;
+        for (uint64_t k = 0; k < end / 8; k++) { uint64_t w; memcpy(&w, d + t + k * 8, 8); h = (h ^ w) * 0x100000001b3ull; }
+        uint32_t type = (rd32(d + t + 0x30) >> 10) & 0xF;
+        int stage = type == 1 ? STAGE_VERTEX : type == 5 ? STAGE_FRAGMENT : type == 4 ? STAGE_GEOMETRY : -1;
+        n_controls++;
+        if (stage >= 0) {
+            pthread_mutex_lock(&flock);
+            uint32_t i = add_shader(d + t, blob, coff, csz, h, stage);
+            found[i].arc = true;
+            if (stage == STAGE_VERTEX) add_prog(i, UINT32_MAX);
+            pthread_mutex_unlock(&flock);
+        }
+        c = t + blob - 4;
+    }
+}
+
+static pthread_mutex_t ard_big_lock = PTHREAD_MUTEX_INITIALIZER;  // (one block over 64 MB at a time, as scan_file)
+static void scan_block(FILE *f, uint64_t at, uint8_t *inner, size_t inner_cap) {
+    uint8_t hd[0x30];
+    if (_fseeki64(f, (long long)at, SEEK_SET) || fread(hd, 1, 0x30, f) != 0x30) return;
+    uint32_t type = rd32(hd + 4), ds = rd32(hd + 8), cs = rd32(hd + 12);
+    bool big = ds > (64u << 20);
+    if (big) pthread_mutex_lock(&ard_big_lock);
+    uint8_t *src = malloc(cs), *d = malloc(ds);
+    size_t got = 0;
+    if (src && d && fread(src, 1, cs, f) == cs) {
+        if (type == 3) { got = ZSTD_decompress(d, ds, src, cs); if (ZSTD_isError(got)) got = 0; }
+        else { uLongf dl = ds; if (uncompress(d, &dl, src, cs) == Z_OK) got = dl; }
+    }
+    free(src);
+    if (got) {
+        scan_buf(d, got);
+        scan_arc(d, got);
+        for (size_t k = 0; k + 2 < got; k++) {  // zlib streams (header 0x78, FCHECK)
+            if (d[k] != 0x78 || ((d[k] << 8) | d[k + 1]) % 31) continue;
+            z_stream z = {0};
+            z.next_in = d + k;
+            z.avail_in = (uInt)(got - k > 0x7fffffff ? 0x7fffffff : got - k);
+            z.next_out = inner;
+            z.avail_out = (uInt)inner_cap;
+            if (inflateInit(&z) != Z_OK) continue;
+            int r = inflate(&z, Z_FINISH);
+            size_t out = z.total_out, used = z.total_in;
+            inflateEnd(&z);
+            if (r != Z_STREAM_END || out < 0x900) continue;
+            scan_arc(inner, out);
+            k += used - 1;
+        }
+    }
+    free(d);
+    if (big) pthread_mutex_unlock(&ard_big_lock);
+}
+
+// the xbc1 block offsets (headers are 16-byte aligned; raw data between blocks is stepped over in 1 MB windows)
+static bool ard_list(const char *path) {
+    FILE *f = fopen(path, "rb");
+    if (!f) return false;
+    size_t cap = 0;
+    uint64_t pos = 0;
+    uint8_t *win = malloc(1 << 20);
+    for (;;) {
+        uint8_t hd[0x30];
+        if (_fseeki64(f, (long long)pos, SEEK_SET) || fread(hd, 1, 0x30, f) != 0x30) break;
+        uint32_t type = rd32(hd + 4), ds = rd32(hd + 8), cs = rd32(hd + 12);
+        if (!memcmp(hd, "xbc1", 4) && (type == 1 || type == 3) && cs && cs <= ds && ds <= (512u << 20)) {
+            if (nblocks == cap) ard_blocks = realloc(ard_blocks, (cap = cap ? cap * 2 : 65536) * sizeof *ard_blocks);
+            ard_blocks[nblocks++] = pos;
+            pos += (0x30 + (uint64_t)cs + 15) & ~15ull;
+            continue;
+        }
+        _fseeki64(f, (long long)pos + 16, SEEK_SET);  // (the next header in this window)
+        size_t n = fread(win, 1, 1 << 20, f), k = 0;
+        if (!n) break;
+        while (k + 4 <= n && memcmp(win + k, "xbc1", 4)) k += 16;
+        pos += 16 + k;
+    }
+    free(win);
+    fclose(f);
+    snprintf(ard_path, sizeof ard_path, "%s", path);
+    return nblocks > 0;
+}
+
+static void *ard_scanner(void *arg) {
+    (void)arg;
+    plat_thread_background();
+    FILE *f = fopen(ard_path, "rb");
+    size_t cap = 64u << 20;
+    uint8_t *inner = malloc(cap);
+    for (size_t i; f && inner && (i = atomic_fetch_add(&next_block, 1)) < nblocks;) {
+        scan_block(f, ard_blocks[i], inner, cap);
+        atomic_fetch_add(&files_done, 1);
+    }
+    free(inner);
+    if (f) fclose(f);
+    return NULL;
+}
+
+// XC3's shadow pass draws a model's vertex shader with one geometry shader shared by every model and one of two
+// fragment shaders (the slow first builds at the first battle). Not recorded anywhere in the files (the engine
+// combines them): translated for every vertex shader from an ARC entry with a code blob of at least 8 KB, so their
+// SPIR-V is in the cache (measured: the game's shadow programs then compiled no SPIR-V). Hashes as objects.c
+// set_shaders (2026-10-29 runs).
+static void ard_shadow_programs(void) {
+    static const uint64_t gs_hash = 0x791affe0615ead35ull, fs_hash[2] = {0x4d2000cd6bf317f6ull, 0x4f883d93e11c2e64ull};
+    uint32_t gs = map_get(&shader_map, gs_hash), fs[2] = {map_get(&shader_map, fs_hash[0]), map_get(&shader_map, fs_hash[1])};
+    if (!gs) { printf("[precompile] shadow-pass geometry shader not found: no shadow programs%c", 10); return; }
+    size_t n0 = nprogs;
+    for (size_t i = 0; i < nfound; i++) {
+        if (found[i].stage != STAGE_VERTEX || !found[i].arc || found[i].blob < 0x2000) continue;
+        for (int k = 0; k < 2; k++) if (fs[k]) add_prog_gs((uint32_t)i, gs, fs[k] - 1);
+    }
+    printf("[precompile] %zu shadow-pass programs (geometry %016llx)%c", nprogs - n0, (unsigned long long)gs_hash, 10);
+}
+#endif
+
 // ------------------------------------------------------------------ building
 static ShaderKey vkey_guess, fkey_guess;
 
@@ -362,19 +512,20 @@ static void inflight_open(void) {
     if (inflight) { static uint8_t zero[64 * 8]; fwrite(zero, 1, sizeof zero, inflight); fflush(inflight); }
 }
 
-static void build_(const Found *vs, const Found *fs);
-static void build(Pair pr, const Found *vs, const Found *fs) {
+static void build_(const Found *vs, const Found *fs, const Found *gs);
+static void build(Pair pr, const Found *vs, const Found *fs, const Found *gs) {
     (void)pr;
-    uint64_t hk[2] = {vs->hash, fs ? fs->hash : 0};
-    if (!job_begin(job_key(hk, sizeof hk, 1))) { atomic_fetch_add(&n_failed, 1); return; }  // (counted: the build loop waits for all)
-    build_(vs, fs);
+    uint64_t hk[3] = {vs->hash, fs ? fs->hash : 0, gs ? gs->hash : 0};
+    if (!job_begin(job_key(hk, gs ? sizeof hk : 2 * sizeof *hk, 1))) { atomic_fetch_add(&n_failed, 1); return; }  // (counted: the build loop waits for all)
+    build_(vs, fs, gs);
     job_end();
 }
-static void build_(const Found *vs, const Found *fs) {
+static void build_(const Found *vs, const Found *fs, const Found *gs) {
     NvnProgram np;
     memset(&np, 0, sizeof np);
     stage_of(&np, 0, vs);
     if (fs) stage_of(&np, 1, fs);
+    if (gs) stage_of(&np, 2, gs);  // [XC3] (exec.c vk_precompile_program derives the geometry keys)
     uint32_t attr = 0;
     int ok = vk_precompile_program(&np, &vkey_guess, &fkey_guess, &attr);
     if (ok && (attr & 2)) {  // (vertex input 1 read: also as an unsigned integer)
@@ -510,9 +661,9 @@ static void *worker(void *arg) {
         while (next_job >= nprogs && !scan_done) pthread_cond_wait(&fcond, &flock);
         if (next_job >= nprogs) { pthread_mutex_unlock(&flock); return NULL; }
         Pair pr = progs[next_job++];
-        Found vs = found[pr.vs], fs = pr.fs != UINT32_MAX ? found[pr.fs] : (Found){0};
+        Found vs = found[pr.vs], fs = pr.fs != UINT32_MAX ? found[pr.fs] : (Found){0}, gs = pr.gs1 ? found[pr.gs1 - 1] : (Found){0};
         pthread_mutex_unlock(&flock);
-        build(pr, &vs, pr.fs != UINT32_MAX ? &fs : NULL);
+        build(pr, &vs, pr.fs != UINT32_MAX ? &fs : NULL, pr.gs1 ? &gs : NULL);
     }
 }
 
@@ -558,11 +709,30 @@ int vk_precompile_main(const char *root) {
     remove("cache/precompile_done.txt");
     vkey_guess.glsl = fkey_guess.glsl = 1;
     vkey_guess.depth_minus_one = true;  // (the game's depth mode and window origin, as exec.c sets them per draw)
-    list_dir(romfs);
+    bool ard = false;
+#ifndef GAME_XCDE
+    {   // [XC3] the archive, not files
+        char ap[1100];
+        snprintf(ap, sizeof ap, "%s/bf3.ard", romfs);
+        ard = ard_list(ap);
+        if (ard) printf("[precompile] %s: %zu blocks%c", ap, nblocks, 10);
+    }
+#endif
+    if (!ard) list_dir(romfs);
     files_total = npaths;
-    if (!npaths) { fprintf(stderr, "[precompile] no shader files under %s%c", romfs, 10); return 1; }
-    qsort(paths, npaths, sizeof *paths, path_cmp);
-    { const char *e = getenv("XCDE_PRECOMPILE_LIBS"); use_libs = !e || atoi(e) != 0; }
+#ifndef GAME_XCDE
+    if (ard) files_total = nblocks;
+#endif
+    if (!files_total) { fprintf(stderr, "[precompile] no shader files under %s%c", romfs, 10); return 1; }
+    if (!ard) qsort(paths, npaths, sizeof *paths, path_cmp);
+    {   // [XC3] SPIR-V only unless XCDE_PRECOMPILE_LIBS=1: see the bf3.ard notes (the libraries took 40 min and saved nothing)
+        const char *e = getenv("XCDE_PRECOMPILE_LIBS");
+#ifdef GAME_XCDE
+        use_libs = !e || atoi(e) != 0;
+#else
+        use_libs = e && atoi(e) != 0;
+#endif
+    }
     setenv("XCDE_PRECOMPILING", "1", 1);  // (shaders.c: no cache-miss log lines)
     setenv("LARECOMP_HIDDEN", "1", 1);
     ui_window_init();  // (the game's own Vulkan device - same driver caches - in a hidden window)
@@ -589,8 +759,12 @@ int vk_precompile_main(const char *root) {
     if (nthreads > 64) nthreads = 64;
     pthread_t th[64], sc[64];
     for (int i = 0; i < nthreads; i++) pthread_create(&th[i], NULL, worker, NULL);
+#ifndef GAME_XCDE
+    if (ard) for (int i = 0; i < nthreads; i++) pthread_create(&sc[i], NULL, ard_scanner, NULL);
+    else
+#endif
     for (int i = 0; i < nthreads; i++) pthread_create(&sc[i], NULL, scanner, NULL);
-    while (files_done < npaths) {
+    while (files_done < files_total) {
         progress("scan", false);
         struct timespec ts = {0, 50000000};
         nanosleep(&ts, NULL);
@@ -598,6 +772,9 @@ int vk_precompile_main(const char *root) {
     for (int i = 0; i < nthreads; i++) pthread_join(sc[i], NULL);
     uint64_t t_scan = now_ns() - t0;
     pthread_mutex_lock(&flock);
+#ifndef GAME_XCDE
+    if (ard) ard_shadow_programs();
+#endif
     scan_done = true;
     pthread_cond_broadcast(&fcond);
     pthread_mutex_unlock(&flock);
@@ -642,7 +819,7 @@ int vk_precompile_main(const char *root) {
     double secs = (now_ns() - t0) / 1e9;
     printf("[precompile] %zu files, %llu control sections, %zu distinct shaders, %zu programs in %.1f s (scan %.1f s): "
            "%llu built (%llu also with integer input 1, %llu more from the container's names), %llu failed; %llu SPIR-V compiled, %llu from the cache; %d threads%c",
-           npaths, (unsigned long long)n_controls, nfound, nprogs, secs, t_scan / 1e9, (unsigned long long)n_built,
+           (size_t)files_total, (unsigned long long)n_controls, nfound, nprogs, secs, t_scan / 1e9, (unsigned long long)n_built,
            (unsigned long long)n_extra, (unsigned long long)n_named_int, (unsigned long long)n_failed, (unsigned long long)vk_spirv_misses,
            (unsigned long long)vk_spirv_hits, nthreads, 10);
     if (getenv("XCDE_PRECOMPILE_LIST")) {  // (tests: "S <hash> <stage>" per shader, "P <vs hash> <fs hash>" per program)

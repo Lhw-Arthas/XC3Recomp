@@ -3303,6 +3303,17 @@ int vk_precompile_program(const NvnProgram *np, const ShaderKey *vkey, const Sha
     p->vkey = *vkey;
     p->fkey = *fkey;
     p->no_fs = !(np->stage_mask & 2) || !np->stages[1].code_addr;
+    if ((np->stage_mask & 4) && np->stages[2].code_addr) {  // [XC3] geometry stage: the keys as get_program_ derives them
+        p->gkey.glsl = 1;
+        p->gkey.flip_y = vkey->flip_y; p->gkey.flip_x = vkey->flip_x; p->gkey.depth_minus_one = vkey->depth_minus_one;
+        p->gkey.gs_in = 3;  // (triangles: the meshes of XC3's shadow pass, the programs that have one)
+        p->vkey.flip_y = p->vkey.flip_x = false;
+        p->vkey.depth_minus_one = false;
+        p->gcode = np->stages[2].code_addr;
+        p->gsrc = nvn_stage_code(&np->stages[2]);
+        p->gcmax = np->stages[2].const_offset ? np->stages[2].const_offset : 0x10000;
+        p->gcsize = np->stages[2].const_offset ? np->stages[2].const_size : 0;
+    }
     tl_inline_jobs = true;
     translate_program(p);  // (and compile_program, run here)
     int ok = atomic_load(&p->state) == 1;
@@ -3321,10 +3332,12 @@ int vk_precompile_program(const NvnProgram *np, const ShaderKey *vkey, const Sha
     }
     if (p->vs) vkDestroyShaderModule(g_vk.dev, p->vs, NULL);
     if (p->fs) vkDestroyShaderModule(g_vk.dev, p->fs, NULL);
+    if (p->gs) vkDestroyShaderModule(g_vk.dev, p->gs, NULL);
     if (p->layout) vkDestroyPipelineLayout(g_vk.dev, p->layout, NULL);
     for (int i = 0; i < 3; i++) if (p->set_layout[i]) vkDestroyDescriptorSetLayout(g_vk.dev, p->set_layout[i], NULL);
     maxwell_free(p->vi);
     maxwell_free(p->fi);
+    if (p->gi) maxwell_free(p->gi);
     free(p);
     return ok;
 }
