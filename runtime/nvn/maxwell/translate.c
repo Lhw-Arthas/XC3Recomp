@@ -79,6 +79,7 @@ typedef struct {
     bool glsl;               // emit Vulkan GLSL: dialect-specific constructs here, the rest via glsl_rewrite()
     bool uses_gmem_store;    // STG present: the gmem buffer is not readonly
     bool uses_pmem;          // [XC3] global memory goes through the alias region's page table too (gmem_access)
+    bool uses_quad;          // [XC3] quad swaps (SHFL xor within the quad, fragment shaders): GL_KHR_shader_subgroup_quad
     uint32_t cbuf_need[18];  // highest constant vec4 index + 1 per cbuf (array size of the GLSL block)
     // [XCDE] geometry stage (GLSL): SPH output topology (1 points, 6 line strip, 7 triangle strip) and vertex count,
     // the vertex index register of the ALD being translated, and the inputs read per vertex
@@ -2173,8 +2174,22 @@ static void emit_insn(Ctx *c, uint64_t w, uint32_t pc) {
         if (c->stage == STAGE_VERTEX) {
             set_reg(c, d, R(a));  // no SIMD-group functions in vertex functions: lane-local value
         } else if (c->glsl) {  // a quad xor (lane mask < 4) is the subgroup xor within the quad
-            static const char *const fn[] = {"subgroupShuffle", "subgroupShuffleUp", "subgroupShuffleDown", "subgroupShuffleXor"};
-            sprintf(t, "%s(%s, uint(%s))", fn[mode], R(a), bv);
+            // [XC3] in fragment shaders a quad swap: the helper lanes of a quad (pixels just outside the triangle, which
+            // screen-space derivatives built from SHFL + FSWZADD need) are only guaranteed to take part in quad
+            // operations, not in subgroupShuffleXor. With the shuffle, XC3's water shader got wrong derivatives along
+            // its mesh's triangle edges: thin dashed dark lines across the water (Riccola Pond), in every upscaler mode.
+            // XC3_QUAD_SHFL=0: the shuffle again.
+            static int qs = -1;
+            if (qs < 0) { const char *e = getenv("XC3_QUAD_SHFL"); qs = !(e && *e == '0'); }
+            uint32_t lm = (uint32_t)bits(w, 20, 5);
+            if (qs && mode == 3 && c->stage == STAGE_FRAGMENT && bits(w, 28, 1) && lm >= 1 && lm <= 3) {
+                static const char *const q[] = {"", "subgroupQuadSwapHorizontal", "subgroupQuadSwapVertical", "subgroupQuadSwapDiagonal"};
+                c->uses_quad = true;
+                sprintf(t, "%s(%s)", q[lm], R(a));
+            } else {
+                static const char *const fn[] = {"subgroupShuffle", "subgroupShuffleUp", "subgroupShuffleDown", "subgroupShuffleXor"};
+                sprintf(t, "%s(%s, uint(%s))", fn[mode], R(a), bv);
+            }
             set_reg(c, d, t);
         } else if (mode == 3) {
             bool quad = bits(w, 28, 1) && bits(w, 20, 5) < 4;
@@ -2432,8 +2447,10 @@ static ShaderInfo *glsl_finish(Ctx *c, bool any_branch, bool dbg) {
         bool any_image = false;
         for (int i = 0; i < info->ntex; i++) any_image |= info->tex[i].is_image;
         const char *nl = strchr(glsl_prelude, 10);
-        if (any_image && nl) {
-            sp(&s, "%.*s\n#extension GL_EXT_shader_image_load_formatted : require\n%s", (int)(nl - glsl_prelude), glsl_prelude, nl + 1);
+        if ((any_image || c->uses_quad) && nl) {  // ([XC3] quad: SHFL)
+            sp(&s, "%.*s\n%s%s%s", (int)(nl - glsl_prelude), glsl_prelude,
+               any_image ? "#extension GL_EXT_shader_image_load_formatted : require\n" : "",
+               c->uses_quad ? "#extension GL_KHR_shader_subgroup_quad : require\n" : "", nl + 1);
         } else {
             sp(&s, "%s", glsl_prelude);
         }
