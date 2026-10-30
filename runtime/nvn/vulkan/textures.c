@@ -286,7 +286,13 @@ static void target_scale(const TexBackend *b, float *sx, float *sy) {
 static bool tex_scene(const NvnTexture *t) {
     int bw, bh;
     output_scale_base(&bw, &bh);
-    return t->width * 2 <= (uint32_t)bw + 16;
+    if (t->width * 2 > (uint32_t)bw + 16) return false;
+    // only the scene's own size and its halvings (960, 480, 240, ... at 1080p, +-1): XC3's water sparkle chain (a 64x36
+    // grid of points into 640x360, then sprites into the scene) drew bright bars across the water once its 640x360 and
+    // 64x36 targets were scaled with the scene (Native / Quality). Effect targets of other sizes keep the game's size.
+    uint32_t s = (uint32_t)bw / 2;
+    while (s > t->width + 1) s /= 2;
+    return s == t->width || s + 1 == t->width || s == t->width + 1;
 }
 
 bool renderer_texture_first_write(NvnTexture *t) {
