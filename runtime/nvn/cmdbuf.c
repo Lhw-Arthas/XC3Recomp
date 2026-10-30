@@ -56,11 +56,44 @@ NVN(nvnCommandBufferSetMemoryCallbackData) { cb_of(A(0))->callback_data = A(1); 
 NVN(nvnCommandBufferGetMemoryCallbackData) { RET(cb_of(A(0))->callback_data); }
 NVN(nvnCommandBufferSetCommandMemoryCallbackEnabled) { (void)c; }
 
+// [XC3] Host command memory when the game's runs out. Our records are several times larger than the GPU's own
+// commands (~330 bytes a draw with its binds): loading one area (an autosave in a canyon) recorded ~21,000 draws in one
+// frame and filled the 7 MB the game gives a command buffer per frame, after which its callback had no more - a fatal
+// "out of command memory". The list then goes on in a host chunk (chained with CMD_JUMP, as guest chunks are). A chunk
+// is reused once HOST_CHUNK_FRAMES presented frames passed since its last use (the backend runs about a frame behind).
+#define HOST_CHUNK_SIZE (8u << 20)
+#define HOST_CHUNK_FRAMES 16
+static struct { uint8_t *p; uint64_t frame; } host_chunk[32];
+static uint64_t host_chunk_get(void) {
+    extern uint64_t renderer_present_count(void);
+    uint64_t now = renderer_present_count();
+    int pick = -1;
+    for (int i = 0; i < 32 && pick < 0; i++)
+        if (host_chunk[i].p && host_chunk[i].frame + HOST_CHUNK_FRAMES < now) pick = i;
+    for (int i = 0; i < 32 && pick < 0; i++)
+        if (!host_chunk[i].p && (host_chunk[i].p = malloc(HOST_CHUNK_SIZE))) pick = i;
+    if (pick < 0) return 0;
+    host_chunk[pick].frame = now;
+    static int n;
+    if (n++ < 20) LOG("[nvn] command memory overflow: host chunk %d (frame %llu)\n", pick, (unsigned long long)now);
+    return (uint64_t)(uintptr_t)host_chunk[pick].p;
+}
+
 // Reserve a record. May call back into the guest for more memory, so callers snapshot their
 // arguments first.
 static CmdRec *rec(Cpu *c, NvnCmdBuf *cb, uint32_t op, uint32_t extra) {
     uint32_t size = (uint32_t)((sizeof(CmdRec) + extra + 7) & ~7u);
     for (int tries = 0; !cb->mem || cb->used + size + JUMP_RESERVE > cb->size; tries++) {
+        if (tries == 2 && cb->mem && size + JUMP_RESERVE <= HOST_CHUNK_SIZE) {  // [XC3] the game had no more: a host chunk
+            uint64_t m = host_chunk_get();
+            if (m) {
+                if (cb->recording) raw_rec(cb->mem + cb->used, CMD_JUMP, sizeof(CmdRec))->x[0] = m;
+                cb->mem = m;
+                cb->size = HOST_CHUNK_SIZE;
+                cb->used = 0;
+                break;
+            }
+        }
         if (!cb->callback || tries == 2) FATAL("nvn: out of command memory (need %u)\n", size);
         uint64_t saved[8];
         memcpy(saved, c->x, sizeof saved);
@@ -70,6 +103,11 @@ static CmdRec *rec(Cpu *c, NvnCmdBuf *cb, uint32_t op, uint32_t extra) {
         c->x[3] = cb->callback_data;
         guest_call(c, cb->callback);
         memcpy(c->x, saved, sizeof saved);
+    }
+    if (cb->size == HOST_CHUNK_SIZE) {  // (a host chunk still being recorded into is not reused: its last use is now)
+        extern uint64_t renderer_present_count(void);
+        for (int i = 0; i < 32; i++)
+            if (host_chunk[i].p && (uint64_t)(uintptr_t)host_chunk[i].p == cb->mem) host_chunk[i].frame = renderer_present_count();
     }
     CmdRec *r = raw_rec(cb->mem + cb->used, op, size);
     cb->used += size;
