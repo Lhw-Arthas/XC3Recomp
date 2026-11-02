@@ -252,10 +252,12 @@ static void text_draw(const char *t, uint8_t *cov, int cw, int ch, float bx, flo
 }
 
 // ------------------------------------------------------------------ texture (Tegra block linear, BC7 / BC3 / RGBA8)
+// [XC3] the mip 0 block height as Nintendo's tools pick it (tegra_swizzle block_height_mip0): from 1.5x the height in
+// blocks. The old rule (smallest that holds the height) gave 16 for XC3's 224x320 font_icon atlas (80 rows of blocks;
+// the game's is 8) and scrambled it; both rules agree on XCDE's atlases.
 static int block_height(int hb) {
-    int bh = 16;
-    while (bh > 1 && hb <= (bh / 2) * 8) bh /= 2;
-    return bh;
+    int hh = hb + hb / 2;
+    return hh >= 128 ? 16 : hh >= 64 ? 8 : hh >= 32 ? 4 : hh >= 16 ? 2 : 1;
 }
 // byte offset of the 16-byte unit at (xb bytes, y rows) in a block-linear surface `row` bytes wide
 static size_t bl_off(int xb, int y, int row, int bh) {
@@ -593,7 +595,8 @@ static uint8_t *kbicons_draw_buf(const char *path, uint8_t *d, size_t n, uint64_
     {
         int w = (int)ft[2], h = (int)ft[3], fmt = (int)ft[6];
         int cell = w / 8;
-        if (w > 1024 || h > 1024 || cell * 8 != w || cell * 4 != h || cell > 64) goto done;
+        // ([XC3] font_icon.wilay: 8 x 11 cells of 28 px, the first 4 rows in the same order; the rest left as they are)
+        if (w > 1024 || h > 1024 || cell * 8 != w || cell * 4 > h || cell > 96) goto done;
         uint8_t *px = decode(d + t + off, size - 0x28, w, h, fmt);
         if (!px) { LOGK("%s: format %d not handled\n", path, fmt); goto done; }
         Img im = {px, w, h};
@@ -694,6 +697,9 @@ bool kbicons_init(void) { return true; }
 #include <zstd.h>
 static const struct { uint64_t off; const char *name; } k_ard_blocks[] = {
     {0x22d6aa4e0ull, "icon_button.wilay"},
+    {0x22b703630ull, "font_icon.wilay"},
+    {0x22d6b0d10ull, "icon_button_y.wilay"},  // (576x288, 72 px cells: the prompts beside text, "Y Quick Save")
+    {0x22d6c4da0ull, "icon_button_y_2.wilay"},
 };
 int kbicons_ard_patches(const char *ard, uint64_t *offs, uint8_t **datas, uint64_t *lens, int max) {
     int np = 0;
