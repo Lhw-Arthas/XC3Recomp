@@ -93,11 +93,14 @@ static void maybe_edit(File *f) {
         size_t pl = strlen(f->path);
         if (pl >= 7 && !strcmp(f->path + pl - 7, "bf3.ard")) {
             settings_load();
-            if (!settings_mod_enabled("icons_keyboard") || !kbicons_init()) return;
-            extern int kbicons_ard_patches(const char *ard, uint64_t *offs, uint8_t **datas, uint64_t *lens, int max);
+            // the launcher's "Iconos de botones" (auto resolved there by the connected controller): mod_icons_*
+            int style = settings_mod_enabled("icons_keyboard") ? 0 : settings_mod_enabled("icons_xbox") ? 1
+                      : settings_mod_enabled("icons_playstation") ? 2 : -1;
+            if (style < 0 || !kbicons_init()) return;
+            extern int kbicons_ard_patches(const char *ard, int style, uint64_t *offs, uint8_t **datas, uint64_t *lens, int max);
             uint64_t o[8], l[8];
             uint8_t *d[8];
-            int n = kbicons_ard_patches(f->path, o, d, l, 8);
+            int n = kbicons_ard_patches(f->path, style, o, d, l, 8);
             if (n) {
                 f->patch = calloc((size_t)n, sizeof *f->patch);
                 for (int i = 0; i < n; i++) f->patch[i] = (Patch){o[i], l[i], d[i]};

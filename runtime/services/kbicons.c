@@ -529,6 +529,7 @@ static uint8_t *read_all(const char *p, size_t *n) {
 }
 
 // The game's file at `path` with the keys drawn: a new buffer (*len bytes), or NULL (left as it is)
+static int g_pad_style;  // [XC3] 0 keyboard keys, 1 Xbox, 2 PlayStation labels (kbicons_ard_patches)
 static uint8_t *kbicons_draw_buf(const char *path, uint8_t *d, size_t n, uint64_t *len);
 static uint8_t *kbicons_draw(const char *path, uint64_t *len) {
     size_t n;
@@ -601,7 +602,9 @@ static uint8_t *kbicons_draw_buf(const char *path, uint8_t *d, size_t n, uint64_
         if (!px) { LOGK("%s: format %d not handled\n", path, fmt); goto done; }
         Img im = {px, w, h};
         const char *base = strrchr(path, '/');
-        atlas_draw(&im, cell, base && !strcmp(base + 1, "button.wilay") ? &k_glow : &k_plain);
+        extern void texpatch_relabel_atlas(uint8_t *img, int w, int h, int cell, int style);
+        if (g_pad_style) texpatch_relabel_atlas(px, w, h, cell, g_pad_style);  // [XC3] Xbox / PlayStation labels
+        else atlas_draw(&im, cell, base && !strcmp(base + 1, "button.wilay") ? &k_glow : &k_plain);
         const char *dump = getenv("XCDE_KBICONS_DUMP");  // (tests: <dir>/<file>_<w>x<h>.rgba)
         if (dump) {
             char p[512];
@@ -701,8 +704,9 @@ static const struct { uint64_t off; const char *name; } k_ard_blocks[] = {
     {0x22d6b0d10ull, "icon_button_y.wilay"},  // (576x288, 72 px cells: the prompts beside text, "Y Quick Save")
     {0x22d6c4da0ull, "icon_button_y_2.wilay"},
 };
-int kbicons_ard_patches(const char *ard, uint64_t *offs, uint8_t **datas, uint64_t *lens, int max) {
+int kbicons_ard_patches(const char *ard, int style, uint64_t *offs, uint8_t **datas, uint64_t *lens, int max) {
     int np = 0;
+    g_pad_style = style;
     FILE *f = fopen(ard, "rb");
     if (!f) return 0;
     for (size_t i = 0; i < sizeof k_ard_blocks / sizeof *k_ard_blocks && np < max; i++) {

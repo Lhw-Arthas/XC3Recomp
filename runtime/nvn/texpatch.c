@@ -1041,3 +1041,21 @@ void texpatch_apply(int id, uint32_t lv, uint8_t *blocks, uint32_t w, uint32_t h
     free(img);
     free(dirty);
 }
+
+// [XC3] Xbox / PlayStation button prompts in XC3's own atlases (runtime/services/kbicons.c: icon_button*.wilay,
+// font_icon.wilay; 8 cells a row, the Switch layout's first 4 rows): each face / shoulder / Plus / Minus cell keeps the
+// game's shape and gets the label of the controller button bound to it (relabel above). img: w x h RGBA8; cell: the
+// cell size; style: 1 Xbox, 2 PlayStation.
+void texpatch_relabel_atlas(uint8_t *img, int w, int h, int cell, int style) {
+    static pthread_once_t font_once = PTHREAD_ONCE_INIT;
+    pthread_once(&font_once, load_font);
+    static const struct { int cell, role; } k[] = {{2, R_MINUS}, {3, R_PLUS}, {4, R_X}, {5, R_Y}, {6, R_A}, {7, R_B},
+                                                   {12, R_L}, {13, R_R}, {14, R_ZL}, {15, R_ZR}};
+    int bw = (w + 3) / 4, st = style == 1 ? STYLE_XBOX : STYLE_PS;
+    uint8_t *dirty = calloc((size_t)bw * ((h + 3) / 4), 1);
+    for (size_t i = 0; i < sizeof k / sizeof *k; i++) {
+        int x0 = (k[i].cell % 8) * cell, y0 = (k[i].cell / 8) * cell;
+        if (x0 + cell <= w && y0 + cell <= h) relabel(img, w, x0, y0, cell, cell, 3, false, k[i].role, st, dirty, bw);
+    }
+    free(dirty);
+}

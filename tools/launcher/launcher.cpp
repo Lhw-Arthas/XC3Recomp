@@ -227,6 +227,10 @@ static const char *const k_en[][2] = {
      "de la comunidad. Necesita una GPU que lo mantenga: en zonas pesadas ayuda FSR en Rendimiento.",
      "60: the game at 60 FPS outside cutscenes (they stay at 30), as the community 60 FPS patch.\n"
      "Needs a GPU that holds it: in heavy areas FSR on Performance helps."},
+    {"Los iconos de los botones del juego: Xbox (A B X Y, LB RB LT RT), PlayStation (símbolos,\n"
+     "L1 R1 L2 R2) o las teclas asignadas, según los controles. Se aplica al iniciar el juego.",
+     "The game's button icons: Xbox (A B X Y, LB RB LT RT), PlayStation (symbols,\n"
+     "L1 R1 L2 R2) or the keys you bound, following your controls. Applied when the game starts."},
     {"Generación de frames (FSR 3)", "Frame generation (FSR 3)"},
     {"Inserta un frame interpolado entre cada dos del juego en todo el juego: el doble de imágenes\n"
      "por segundo (p. ej. FPS 30 -> 60 en pantalla). La de AMD: funciona con FSR 3.1 y con DLSS.\n"
@@ -833,19 +837,25 @@ static void tab_controls() {
     ImGui::SetItemTooltip(T("Pasa el control al siguiente miembro del grupo, en el campo y en combate. Cada uno se queda\n"
                           "donde está y conserva sus recargas de artes; el anterior pasa a la IA. No funciona en menús ni\n"
                           "escenas, y en combate salta a los miembros caídos."));
+#endif
     {
         static const char *ic_ui[] = {"Automático (el mando conectado; sin mando, teclado)", "Switch", "Xbox", "PlayStation",
                                       "Teclado (las teclas asignadas)"};
         ImGui::SetNextItemWidth(340 * g_scale);
         ImGui::Combo(T("Iconos de botones"), &g.icons, TL(ic_ui, 5).p, 5);
+#ifdef GAME_XCDE
         int ic = icons_effective(g.icons);
         if ((ic == 2 || ic == 3) && !exists((std::string("mods/") + k_icon_mod[ic - 2] + "/romfs").c_str()))  // (4: keyboard, no pack)
             ImGui::TextColored(ImVec4(1, 0.6f, 0.2f, 1), T("Falta el pack: descarga \"%s\" de GameBanana y pon su carpeta romfs en mods\\%s"),
                                ic == 2 ? "Xbox control layout" : "PS5 DualSense control layout", k_icon_mod[ic - 2]);
         ImGui::SetItemTooltip(T("Xbox / PlayStation: packs de iconos de CompC (GameBanana). Teclado: el juego dibuja en cada\n"
                               "icono la tecla asignada a ese botón (también ratón). Se aplica al iniciar el juego."));
-    }
+#else
+        // [XC3] all styles drawn by the game itself (runtime/services/kbicons.c, texpatch.c): no packs needed
+        ImGui::SetItemTooltip(T("Los iconos de los botones del juego: Xbox (A B X Y, LB RB LT RT), PlayStation (símbolos,\n"
+                              "L1 R1 L2 R2) o las teclas asignadas, según los controles. Se aplica al iniciar el juego."));
 #endif
+    }
     {
         static const char *ml_ui[] = {"No", "Manteniendo el botón derecho", "Siempre"};
         ImGui::SetNextItemWidth(260 * g_scale);
