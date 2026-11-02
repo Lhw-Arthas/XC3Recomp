@@ -4609,8 +4609,13 @@ static uint64_t g_direct_limit;  // (T175) bytes the buffer guest_direct returne
 // later on the GPU - stale instance matrices, black streaks across the screen. After each such draw the ranges it
 // wrote are gathered from the pool's pages into a device-local mirror (pmm_refresh: the pages of one buffer need not
 // be in a row in the pool), and vertex streams starting in a mirror read it. Other alias-region streams are copied.
-typedef struct { uint64_t base, size; VkBuffer buf; VmaAllocation mem; } PmMirror;
-#define NPMM 48
+// A mirror serves reads only while its writer keeps writing it (wframe: the last presented frame it was refreshed in;
+// PMM_LIVE frames): once the game frees the buffer and reuses its addresses for CPU-written data, a stale mirror read
+// in its place. The table holds NPMM mirrors; when full the one written longest ago is replaced. (48 filled up within
+// a minute of walking, after which new writers got none: foliage seen later drew black.)
+typedef struct { uint64_t base, size, wframe; VkBuffer buf; VmaAllocation mem; } PmMirror;
+#define NPMM 256
+#define PMM_LIVE 2
 static PmMirror pmm[NPMM];
 static int npmm;
 static struct { uint64_t lo, hi; } pm_pend[16];  // (written by the draw being recorded)
@@ -4631,14 +4636,21 @@ static PmMirror *pmm_for(uint64_t lo, uint64_t hi) {  // the mirror holding [lo,
         if (vc_ndead == VC_DEAD) { vk_wait_seq(vk_pending_seq() - 1); vc_free_dead(false); }  // (freed once the GPU is done, as xsh_retire_overlaps)
         if (vc_ndead < VC_DEAD) { vc_dead[vc_ndead].b = m->buf; vc_dead[vc_ndead].m = m->mem; vc_dead[vc_ndead++].seq = vk_pending_seq(); }
     } else {
-        if (npmm == NPMM) return NULL;
-        m = &pmm[npmm++];
+        if (npmm < NPMM) m = &pmm[npmm++];
+        else {  // full: replace the mirror written longest ago
+            m = &pmm[0];
+            for (int i = 1; i < npmm; i++) if (pmm[i].wframe < m->wframe) m = &pmm[i];
+            if (vc_ndead == VC_DEAD) { vk_wait_seq(vk_pending_seq() - 1); vc_free_dead(false); }
+            if (vc_ndead < VC_DEAD) { vc_dead[vc_ndead].b = m->buf; vc_dead[vc_ndead].m = m->mem; vc_dead[vc_ndead++].seq = vk_pending_seq(); }
+            static int nl;
+            if (!nl++) LOG("[vk] alias-region mirrors: table full (%d), replacing the oldest\n", NPMM);
+        }
     }
     VkBufferCreateInfo bi = {.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO, .size = hi - lo,
                              .usage = VK_BUFFER_USAGE_VERTEX_BUFFER_BIT | VK_BUFFER_USAGE_INDEX_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT};
     VmaAllocationCreateInfo ai = {.usage = VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE};
     VK_CHECK(vmaCreateBuffer(g_vk.vma, &bi, &ai, &m->buf, &m->mem, NULL));
-    m->base = lo; m->size = hi - lo;
+    m->base = lo; m->size = hi - lo; m->wframe = 0;
     return m;
 }
 static void pmm_refresh(void) {  // after a draw that wrote pm_pend (outside a render pass)
@@ -4652,6 +4664,7 @@ static void pmm_refresh(void) {  // after a draw that wrote pm_pend (outside a r
         uint64_t lo = pm_pend[i].lo, hi = pm_pend[i].hi;
         PmMirror *m = pmm_for(lo, hi);
         if (!m) continue;
+        m->wframe = renderer_present_count();
         lo = m->base, hi = m->base + m->size;  // (whole: a grown mirror is filled from the pool)
         VkBufferCopy cp[64];
         int nc = 0;
@@ -4668,8 +4681,9 @@ static void pmm_refresh(void) {  // after a draw that wrote pm_pend (outside a r
     npm_pend = 0;
 }
 static bool pmem_direct(uint64_t addr, uint64_t size, VkBuffer *buf, VkDeviceSize *off) {
+    uint64_t now = renderer_present_count();
     for (int i = 0; i < npmm; i++)
-        if (addr >= pmm[i].base && addr < pmm[i].base + pmm[i].size) {
+        if (addr >= pmm[i].base && addr < pmm[i].base + pmm[i].size && now - pmm[i].wframe <= PMM_LIVE) {
             *buf = pmm[i].buf;
             *off = addr - pmm[i].base;
             g_direct_limit = pmm[i].base + pmm[i].size - addr;
