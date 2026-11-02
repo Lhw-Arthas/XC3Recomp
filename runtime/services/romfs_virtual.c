@@ -23,7 +23,8 @@
 #define FD_CACHE 256
 
 typedef struct Dir Dir;
-typedef struct { char *name, *path; uint64_t size, data_off; uint32_t off; Dir *parent; int index; uint8_t *mem; bool traced; } File;
+typedef struct { uint64_t off, len; uint8_t *d; } Patch;  // [XC3] bytes served in place of the file's own (rvfs_read)
+typedef struct { char *name, *path; uint64_t size, data_off; uint32_t off; Dir *parent; int index; uint8_t *mem; bool traced; Patch *patch; int npatch; } File;
 struct Dir { char *name, *path; Dir *parent; Dir **dirs; File **files; int ndirs, nfiles; uint32_t off; };
 typedef struct { Dir **dirs; File **files; int nd, nf, cd, cf; } Lists;
 
@@ -88,8 +89,23 @@ static void maybe_edit(File *f) {
     extern bool kbicons_wanted(const char *path), kbicons_init(void), settings_mod_enabled(const char *name);
     extern uint8_t *kbicons_make(const char *path, uint64_t *len);
 #ifndef GAME_XCDE
-    (void)f;
-    return;  // [XC3] both edits below rewrite XCDE files (menu/image/*.wilay, lib_nx.ini); XC3's are not mapped yet
+    {   // [XC3] keyboard button prompts: blocks of bf3.ard redrawn (runtime/services/kbicons.c kbicons_ard_patches)
+        size_t pl = strlen(f->path);
+        if (pl >= 7 && !strcmp(f->path + pl - 7, "bf3.ard")) {
+            settings_load();
+            if (!settings_mod_enabled("icons_keyboard") || !kbicons_init()) return;
+            extern int kbicons_ard_patches(const char *ard, uint64_t *offs, uint8_t **datas, uint64_t *lens, int max);
+            uint64_t o[8], l[8];
+            uint8_t *d[8];
+            int n = kbicons_ard_patches(f->path, o, d, l, 8);
+            if (n) {
+                f->patch = calloc((size_t)n, sizeof *f->patch);
+                for (int i = 0; i < n; i++) f->patch[i] = (Patch){o[i], l[i], d[i]};
+                f->npatch = n;
+            }
+        }
+        return;  // (lib_nx.ini and XCDE's menu files: not XC3's)
+    }
 #endif
     if (kbicons_wanted(f->path)) {  // [XCDE] T234: keyboard button prompts (runtime/services/kbicons.c)
         static int loaded;
@@ -428,6 +444,16 @@ int64_t rvfs_read(uint8_t *dst, uint64_t size, uint64_t off) {
                 if (r < 0) fprintf(stderr, "[romfs] read error %s +%llx (%llu bytes): zero-filled\n", g_files[hit]->path, (unsigned long long)in, (unsigned long long)n);
                 if (r < 0) r = 0;
                 if ((uint64_t)r < n) memset(dst + done + r, 0, (size_t)(n - r));
+                for (int k = 0; k < f->npatch; k++) {  // [XC3] patched spans over what was read
+                    const Patch *pt = &f->patch[k];
+                    uint64_t a = in > pt->off ? in : pt->off, b = in + n < pt->off + pt->len ? in + n : pt->off + pt->len;
+                    if (a < b) {
+                        memcpy(dst + done + (a - in), pt->d + (a - pt->off), (size_t)(b - a));
+                        static int nl;
+                        if (nl++ < 4) fprintf(stderr, "[romfs] patched span %llx read (+%llx, %llu bytes)\n", (unsigned long long)pt->off,
+                                              (unsigned long long)(a - pt->off), (unsigned long long)(b - a));
+                    }
+                }
             } else {  // padding between files
                 uint64_t next = (hit + 1 < g_nfiles) ? DATA_START + g_files[hit + 1]->data_off : g_data_end;
                 if (n > next - o) n = next - o;

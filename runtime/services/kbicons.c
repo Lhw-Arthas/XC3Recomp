@@ -527,12 +527,16 @@ static uint8_t *read_all(const char *p, size_t *n) {
 }
 
 // The game's file at `path` with the keys drawn: a new buffer (*len bytes), or NULL (left as it is)
+static uint8_t *kbicons_draw_buf(const char *path, uint8_t *d, size_t n, uint64_t *len);
 static uint8_t *kbicons_draw(const char *path, uint64_t *len) {
-    if (!font_load()) { LOGK("no system font\n"); return NULL; }
     size_t n;
-    if (getenv("XCDE_KBICONS_DUMP")) LOGK("%s: draw\n", path);
     uint8_t *d = read_all(path, &n);
-    if (!d) return NULL;
+    return d ? kbicons_draw_buf(path, d, n, len) : NULL;
+}
+// [XC3] the same from a buffer (taken: freed here); path: the file's name as the game's menu/image/<file>
+static uint8_t *kbicons_draw_buf(const char *path, uint8_t *d, size_t n, uint64_t *len) {
+    if (!font_load()) { LOGK("no system font\n"); free(d); return NULL; }
+    if (getenv("XCDE_KBICONS_DUMP")) LOGK("%s: draw\n", path);
     if (n >= 0x30 && !memcmp(d, "xbc1", 4)) {  // (zlib-compressed)
         uint32_t dsz, csz;
         memcpy(&dsz, d + 8, 4), memcpy(&csz, d + 12, 4);
@@ -681,3 +685,54 @@ uint8_t *kbicons_make(const char *path, uint64_t *len) {
 }
 
 bool kbicons_init(void) { return true; }
+
+// [XC3] XC3 keeps its UI files inside bf3.ard as xbc1 blocks (a 0x30-byte header: "xbc1", type 1 zlib / 3 zstd,
+// decompressed size, compressed size, a hash, the file name; then the data), read by the game at the offsets its
+// bf3.arh lists. The button atlas is redrawn and served in place of its block (romfs_virtual.c rvfs_read patches):
+// the new block must fit the old one's compressed size, so the game's offsets and sizes stay. Known blocks of 2.2.0;
+// each is checked by its header's name, and left alone on any mismatch.
+#include <zstd.h>
+static const struct { uint64_t off; const char *name; } k_ard_blocks[] = {
+    {0x22d6aa4e0ull, "icon_button.wilay"},
+};
+int kbicons_ard_patches(const char *ard, uint64_t *offs, uint8_t **datas, uint64_t *lens, int max) {
+    int np = 0;
+    FILE *f = fopen(ard, "rb");
+    if (!f) return 0;
+    for (size_t i = 0; i < sizeof k_ard_blocks / sizeof *k_ard_blocks && np < max; i++) {
+        uint8_t h[0x30];
+        if (_fseeki64(f, (long long)k_ard_blocks[i].off, SEEK_SET) || fread(h, 1, 0x30, f) != 0x30) continue;
+        uint32_t type, ds, cs;
+        memcpy(&type, h + 4, 4), memcpy(&ds, h + 8, 4), memcpy(&cs, h + 12, 4);
+        if (memcmp(h, "xbc1", 4) || strncmp((const char *)h + 0x14, k_ard_blocks[i].name, 28) || type != 3 || cs > (8u << 20) || ds > (32u << 20)) {
+            LOGK("bf3.ard: %s not at %llx (another game version?)\n", k_ard_blocks[i].name, (unsigned long long)k_ard_blocks[i].off);
+            continue;
+        }
+        uint8_t *c = malloc(cs), *d = malloc(ds);
+        size_t got = fread(c, 1, cs, f) == cs ? ZSTD_decompress(d, ds, c, cs) : 0;
+        free(c);
+        if (!got || ZSTD_isError(got)) { free(d); continue; }
+        char path[96];
+        snprintf(path, sizeof path, "menu/image/%s", k_ard_blocks[i].name);
+        uint64_t nlen;
+        uint8_t *nd = kbicons_draw_buf(path, d, got, &nlen);
+        if (!nd) continue;
+        size_t cap = ZSTD_compressBound(nlen);
+        uint8_t *blk = calloc(1, 0x30 + (cap > cs ? cap : cs));
+        size_t ncs = ZSTD_compress(blk + 0x30, cap, nd, nlen, 19);
+        free(nd);
+        if (ZSTD_isError(ncs) || ncs > cs) {
+            LOGK("bf3.ard %s: redrawn block %zu bytes, the game's is %u - not used\n", k_ard_blocks[i].name, ZSTD_isError(ncs) ? 0 : ncs, cs);
+            free(blk);
+            continue;
+        }
+        memcpy(blk, h, 0x30);
+        uint32_t nds = (uint32_t)nlen, ncs32 = (uint32_t)ncs;
+        memcpy(blk + 8, &nds, 4), memcpy(blk + 12, &ncs32, 4);
+        offs[np] = k_ard_blocks[i].off, datas[np] = blk, lens[np] = 0x30 + (uint64_t)cs;  // (the old span: rest zero)
+        LOGK("bf3.ard %s: redrawn (%u -> %u bytes decompressed, %u -> %zu compressed)\n", k_ard_blocks[i].name, ds, nds, cs, ncs);
+        np++;
+    }
+    fclose(f);
+    return np;
+}
