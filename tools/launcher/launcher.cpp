@@ -223,6 +223,10 @@ static const char *const k_en[][2] = {
      "de la ventana). Rendimiento = la del juego original (la mitad); Nativo = la de la ventana.",
      "The resolution the scene is rendered at before reconstruction (percentage of the window's\n"
      "side). Performance = the original game's (half); Native = the window's."},
+    {"60 / 120: el juego a 60 / 120 FPS fuera de las cinemáticas (que siguen a 30). Necesita una GPU\n"
+     "que lo mantenga (en zonas pesadas ayuda FSR en Rendimiento); 120 se ve entero en una pantalla de 120 Hz o más.",
+     "60 / 120: the game at 60 / 120 FPS outside cutscenes (they stay at 30). Needs a GPU that\n"
+     "holds it (in heavy areas FSR on Performance helps); 120 shows in full on a 120 Hz or faster display."},
     {"Los iconos de los botones del juego: Xbox (A B X Y, LB RB LT RT), PlayStation (símbolos,\n"
      "L1 R1 L2 R2) o las teclas asignadas, según los controles. Se aplica al iniciar el juego.",
      "The game's button icons: Xbox (A B X Y, LB RB LT RT), PlayStation (symbols,\n"
@@ -778,10 +782,19 @@ static void tab_graphics() {
     ImGui::Checkbox(T("Mostrar FPS en la barra de título"), &g.show_fps);
     ImGui::SeparatorText(T("Velocidad"));
     static const char *fps_ui[] = {"30 (como en Switch)", "60", "120", "144", "165", "Sin límite"};
+#ifndef GAME_XCDE
+    // [XC3] 30 / 60 / 120 only (runtime/hle/framepace.c xc3_fps_frame: the 60 fps cheat's interval and frame time,
+    // xc3_limiter_k for 120)
+    if (g.fps > 2) g.fps = 2;
+    ImGui::Combo("FPS", &g.fps, TL(fps_ui, 3).p, 3);
+    ImGui::SetItemTooltip(T("60 / 120: el juego a 60 / 120 FPS fuera de las cinemáticas (que siguen a 30). Necesita una GPU\n"
+                          "que lo mantenga (en zonas pesadas ayuda FSR en Rendimiento); 120 se ve entero en una pantalla de 120 Hz o más."));
+#else
     ImGui::Combo("FPS", &g.fps, TL(fps_ui, 6).p, 6);
     ImGui::SetItemTooltip(T("Más de 30: la velocidad del mundo, el reloj y las escenas no cambian (probado a 60 y 120);\n"
                           "la cámara queda un poco más lejos. El V-Sync forzado en el panel de NVIDIA / AMD o el límite\n"
                           "de RivaTuner también limitan los FPS: déjalos en 'configuración de la aplicación' / 0."));
+#endif
     ImGui::Checkbox(T("V-Sync (con 30 / 60 FPS)"), &g.vsync);
     ImGui::SetItemTooltip(T("Cada imagen se muestra exactamente una vez, sincronizada con la pantalla: movimiento\n"
                           "fluido (sin imágenes repetidas o saltadas). Con más de 60 FPS o sin límite no se aplica."));

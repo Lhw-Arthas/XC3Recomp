@@ -107,9 +107,80 @@ bool xcde_cutscene_30(void) { return g_cut30; }
 // the frame rate the window is presented at (device.c repeat presents): 30 while a cutscene is held at 30
 int xcde_present_fps(void) { return g_cut30 ? 30 : g_settings.fps; }
 
+// [XC3] 60 fps (FPS option 60): what the community cheat "60 FPS Gameplay + 30 FPS Cutscene + UI Speed Fix"
+// (github.com/ChanseyIsTheBest/NX-60FPS-RES-GFX-Cheats, build 0AE74B263D8AC3CF) writes. Its addresses hold the same
+// things in 2.2.0 (82D187FE9EF9BE92), read in a running game on 2026-10-29: main+0x1B42DB0 the frame interval (two
+// u32, 2 = 30 fps), *(main+0x1BA1A90) + 0x80 the frame time the game steps its world by (1/30), main+0x1BA1A98 a
+// cutscene flag (1 in a cutscene). Outside cutscenes interval 1 and 1/60; in cutscenes the game's 2 and 1/30 (held at
+// 30 fps, presented at 30 - xcde_present_fps). Written each presented frame (device.c), as the cheat engine does.
+// 120 (FPS option 120 and above): interval 1 too, and the frame limiter's factor halved (xc3_limiter_k).
+static bool xc3_60;  // (this frame: 60 / 120 fps gameplay - xc3_ui_step, xc3_limiter_k)
+// the XC3 frame rate for the FPS option: 30, 60, or 120 (120, 144, 165, unlimited)
+static int xc3_fps_target(void) {
+    static int t;
+    if (!t) t = g_settings.fps == 30 || ENV("XC3_FPS_OFF") ? 30 : g_settings.fps > 0 && g_settings.fps <= 60 ? 60 : 120;
+    return t;
+}
+void xc3_fps_frame(void) {
+#ifndef GAME_XCDE
+    int target = xc3_fps_target();
+    if (target == 30) return;
+    volatile uint32_t *iv = (volatile uint32_t *)(uintptr_t)0x7001B42DB0ull;
+    volatile uint8_t *cut = (volatile uint8_t *)(uintptr_t)0x7001BA1A98ull;
+    uint64_t ft = *(volatile uint64_t *)(uintptr_t)0x7001BA1A90ull;
+    if (ft < GUEST_LO || ft >= HEAP_BASE + HEAP_MAX) return;  // (not made yet: boot)
+    volatile float *step = (volatile float *)(uintptr_t)(ft + 0x80);
+    bool in_cut = *cut != 0;
+    xc3_60 = !in_cut;
+    g_cut30 = in_cut;
+    iv[0] = iv[1] = in_cut ? 2 : 1;
+    // the world steps by this each frame: the cheat writes 1/60, which is slow motion when a frame takes longer (40 fps:
+    // 0.67x). The measured frame time instead (average of the last 8 presents, 1/target .. 1/30): the world keeps its
+    // speed between 30 and the target. XC3_FPS_FIXED_STEP=1: a fixed 1/target (the cheat's 1/60).
+    static uint64_t last, hist[8];
+    static int nh, fixed = -1;
+    if (fixed < 0) fixed = ENV("XC3_FPS_FIXED_STEP") != NULL || diag_deterministic();
+    uint64_t now = plat_now_ns();
+    if (last && now - last < 200000000ull) hist[nh++ % 8] = now - last;  // (a stall: not a frame time)
+    last = now;
+    float lo = 1.0f / (float)target, dt = lo;
+    if (!fixed && nh >= 8) {
+        uint64_t s = 0;
+        for (int i = 0; i < 8; i++) s += hist[i];
+        dt = (float)(s / 8) * 1e-9f;
+        dt = dt < lo ? lo : dt > 1.0f / 30.0f ? 1.0f / 30.0f : dt;
+    }
+    *step = in_cut ? 1.0f / 30.0f : dt;
+    {   // XC3_FPS_LOG=1: the step written, every 300 presents
+        static int lg = -1;
+        static uint64_t n;
+        if (lg < 0) lg = ENV("XC3_FPS_LOG") != NULL;
+        if (lg && ++n % 300 == 0) LOG("[fps] XC3 step %.2f ms (%s), interval %u\n", *step * 1e3, in_cut ? "cutscene" : "gameplay", iv[0]);
+    }
+    static int logged;
+    if (!logged) { logged = 1; LOG("[fps] XC3 %d fps: interval and frame time written (cutscenes at 30)\n", target); }
+#endif
+}
+// [XC3] 120 fps (games/xc3/patches.py, 0x700124fad0): the frame limiter waits until a frame took display period *
+// interval * k, k = 0.997 (w22). Halved in 120 fps gameplay: interval 1 then waits half a 60 Hz period. Cutscenes and
+// boot (before xc3_fps_frame runs) keep the game's factor.
+uint32_t xc3_limiter_k(uint32_t k) {
+    if (!xc3_60 || xc3_fps_target() != 120) return k;
+    float f;
+    memcpy(&f, &k, 4);
+    f *= 0.5f;
+    memcpy(&k, &f, 4);
+    return k;
+}
+// [XC3] the cheat's "UI Speed Fix" (games/xc3/patches.py, main+0x67370): at 60 / 120 fps the UI layout's frame step
+// ([layout + 0x214]) stays 1/30 - its 2D animations otherwise ran twice as fast
+void xc3_ui_step(uint64_t layout) {
+    if (xc3_60 && layout) *(volatile float *)(uintptr_t)(layout + 0x214) = 1.0f / 30.0f;
+}
+
 static void fps_interval_force(void) {
 #ifndef GAME_XCDE
-    return;  // [XC3] writes XCDE's frame interval pointer and period constant: XC3's limiter is not found yet
+    return;  // [XC3] writes XCDE's frame interval pointer and period constant: XC3's are xc3_fps_frame / xc3_limiter_k
 #endif
     static int want = -2;
     static float scale = -1;

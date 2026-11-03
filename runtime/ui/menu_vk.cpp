@@ -229,7 +229,8 @@ static void ui(void) {
             static const char *fpsu[] = {"30 (como en Switch)", "60", "120", "144", "165", "Sin límite"};
             int fi = 0;
             for (int i = 0; i < 6; i++) if (fpsv[i] == g_settings.fps) fi = i;
-            if (ImGui::Combo(T("FPS (al reiniciar)"), &fi, TL(fpsu, 6).p, 6)) g_settings.fps = fpsv[fi];
+            if (fi > 2) fi = 2;  // [XC3] 30 / 60 / 120 only (framepace.c xc3_fps_frame)
+            if (ImGui::Combo(T("FPS (al reiniciar)"), &fi, TL(fpsu, 3).p, 3)) g_settings.fps = fpsv[fi];
             if (ImGui::Checkbox(T("V-Sync (con 30 / 60 FPS)"), &g_settings.vsync)) vk_request_swapchain_recreate();
             ImGui::EndTabItem();
         }
