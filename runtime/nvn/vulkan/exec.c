@@ -4696,6 +4696,33 @@ static void xpm_note(uint64_t lo, uint64_t hi) {
     for (int i = 0; i < npm_pend; i++) if (pm_pend[i].lo == lo && pm_pend[i].hi == hi) return;
     if (npm_pend < 16) pm_pend[npm_pend++] = (typeof(pm_pend[0])){lo, hi};
 }
+// [XC3] Streams are read from the pool itself (pmem_buf) when the pages of their range follow each other there, as
+// kernel.c maps them: the writers' stores land in the pool and the next draws read them there, behind the full
+// barrier their new pass begins with - no mirror. pmm_refresh copied each writer's three storage buffers (~1.1 MB)
+// whole after every writer draw: ~420 per canyon frame, 26 of 42 ms of GPU time. Ranges whose pages are not in a row
+// still get mirrors. XC3_PMM_MIRROR=1: mirrors for every range, as before.
+static bool pmm_mirror_all(void) {
+    static int on = -1;
+    if (on < 0) on = getenv("XC3_PMM_MIRROR") != NULL;
+    return on;
+}
+// [addr, addr + size) in the alias region on pool pages in a row: their offset in pmem_buf and the bytes from there to
+// the end of the last page of the range
+static bool pool_run(uint64_t addr, uint64_t size, VkDeviceSize *off, uint64_t *limit) {
+    uint64_t psize;
+    const uint32_t *ptab;
+    pmem_import();
+    if (!pmem_buf || !size || !kernel_pmem(&psize, &ptab) || !ptab || addr < maxwell_pmem_base ||
+        addr - maxwell_pmem_base + size > maxwell_pmem_size)
+        return false;
+    uint64_t p0 = (addr - maxwell_pmem_base) / PLAT_PMEM_PAGE, p1 = (addr + size - 1 - maxwell_pmem_base) / PLAT_PMEM_PAGE;
+    if (!ptab[p0]) return false;
+    for (uint64_t p = p0 + 1; p <= p1; p++)
+        if (ptab[p] != ptab[p0] + (uint32_t)(p - p0)) return false;
+    *off = (uint64_t)(ptab[p0] - 1) * PLAT_PMEM_PAGE + (addr & (PLAT_PMEM_PAGE - 1));
+    *limit = (p1 + 1 - p0) * PLAT_PMEM_PAGE - (addr & (PLAT_PMEM_PAGE - 1));
+    return true;
+}
 static PmMirror *pmm_for(uint64_t lo, uint64_t hi) {  // the mirror holding [lo, hi), made (or grown) as needed
     for (int i = 0; i < npmm; i++)
         if (lo >= pmm[i].base && hi <= pmm[i].base + pmm[i].size) return &pmm[i];
@@ -4731,6 +4758,15 @@ static void pmm_refresh(void) {  // after a draw that wrote pm_pend (outside a r
     const uint32_t *ptab;
     pmem_import();
     if (!npm_pend || !pmem_buf || !kernel_pmem(&psize, &ptab)) { npm_pend = 0; return; }
+    if (!pmm_mirror_all()) {  // (read from the pool in place: pool_run)
+        int n = 0;
+        for (int i = 0; i < npm_pend; i++) {
+            VkDeviceSize o;
+            uint64_t l;
+            if (!pool_run(pm_pend[i].lo, pm_pend[i].hi - pm_pend[i].lo, &o, &l)) pm_pend[n++] = pm_pend[i];
+        }
+        if (!(npm_pend = n)) return;
+    }
     VkCommandBuffer cb = vk_cmd();
     vk_full_barrier(cb);
     for (int i = 0; i < npm_pend; i++) {
@@ -4754,7 +4790,12 @@ static void pmm_refresh(void) {  // after a draw that wrote pm_pend (outside a r
     npm_pend = 0;
 }
 static bool pmem_direct(uint64_t addr, uint64_t size, VkBuffer *buf, VkDeviceSize *off) {
-    (void)size;
+    uint64_t limit;
+    if (!pmm_mirror_all() && pool_run(addr, size, off, &limit)) {
+        *buf = pmem_buf;
+        g_direct_limit = limit;
+        return true;
+    }
     uint64_t now = renderer_present_count();
     for (int i = 0; i < npmm; i++)
         if (addr >= pmm[i].base && addr < pmm[i].base + pmm[i].size && now - pmm[i].wframe <= PMM_LIVE) {
