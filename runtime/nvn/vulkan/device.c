@@ -481,7 +481,13 @@ float vk_display_hz(void) {
 
 static int repeat_presents(void) {
     static int off = -1;
+#ifdef GAME_XCDE
     if (off < 0) off = getenv("XCDE_REPEAT_PRESENT") && atoi(getenv("XCDE_REPEAT_PRESENT")) == 0;
+#else
+    // [XC3] Do not repeat-present by default: on high-refresh displays (e.g. 180 Hz at 30 fps -> 6 presents/frame)
+    // queueing 6 FIFO presents into a 3-image swapchain blocks the render worker for ~21 ms every frame.
+    if (off < 0) off = !getenv("XCDE_REPEAT_PRESENT") || atoi(getenv("XCDE_REPEAT_PRESENT")) == 0;
+#endif
     extern bool tmp_fg_active(void);
     extern int xcde_present_fps(void);  // (FPS setting, or 30 while a cutscene is held at 30: framepace.c)
     int fps = xcde_present_fps();
@@ -1207,6 +1213,17 @@ void backend_present(NvnTexture *t) {
         if (getenv("LARECOMP_EXIT_AFTER_SHOT") && !shot_from) { fflush(stderr); _exit(0); }
     }
     double now = SDL_GetTicks() / 1000.0;
+    {
+        static double hud_t;
+        static uint64_t hud_f;
+        hud_f++;
+        if (!hud_t) hud_t = now;
+        else if (now - hud_t >= 0.5) {
+            menu_set_fps((float)(hud_f / (now - hud_t)));
+            hud_f = 0;
+            hud_t = now;
+        }
+    }
     static double fps_iv = -1, prev_present, max_gap;
     if (fps_iv < 0) fps_iv = getenv("LARECOMP_FPS_INTERVAL") ? atof(getenv("LARECOMP_FPS_INTERVAL")) : 2.0;
     if (prev_present > 0 && now - prev_present > max_gap) max_gap = now - prev_present;
@@ -1216,11 +1233,6 @@ void backend_present(NvnTexture *t) {
         if (last_fps_time > 0)
             LOG("[vk] t=%.1f frame %llu %.1f fps max %.0fms level %s (%s)\n", now, (unsigned long long)total_frames,
                 frames / (now - last_fps_time), max_gap * 1000.0, game_level_name(), renderer_stats());
-        if (g_settings.show_fps && last_fps_time > 0 && window) {  // [XCDE] launcher option: frame rate in the title bar
-            char title[128];
-            snprintf(title, sizeof title, "Xenoblade Chronicles: Definitive Edition (Recomp) - %.0f fps", frames / (now - last_fps_time));
-            SDL_SetWindowTitle(window, title);
-        }
         {   // [XCDE] the pipeline cache is also written every 2 minutes, not only at a clean exit: a crash or a killed
             // process used to lose every pipeline built in the session (the next start compiled them all again)
             // [XCDE] on a thread of its own, and only when pipelines were made since: serializing + writing the 100+ MB

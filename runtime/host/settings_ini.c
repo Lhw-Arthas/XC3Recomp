@@ -32,7 +32,12 @@ static char g_button_icons[16] = "auto";  // [XCDE] the launcher's choice (butto
 
 static const char *ini_path(void) {
     const char *e = getenv("XCDE_INI");
-    return e ? e : "xcde.ini";
+    if (e) return e;
+#ifdef GAME_XCDE
+    return "xcde.ini";
+#else
+    return "xc3.ini";
+#endif
 }
 
 static char *trim(char *s) {

@@ -78,9 +78,11 @@ static int key_from_ini(const char *v) {
 
 #ifdef GAME_XCDE
 #define APP_NAME "Monado"
+#define INI_FILE "xcde.ini"
 #define DEF_WIN 0
 #else
 #define APP_NAME "XC3Recomp"  // [XC3]
+#define INI_FILE "xc3.ini"
 #define DEF_WIN 2             // [XC3] 1920x1080: the size XC3 draws its gameplay frame at (its window crop)
 #endif
 
@@ -259,7 +261,7 @@ static const char *const k_en[][2] = {
      "The temporal anti-aliasing (TMAA), motion blur and hair blur the game applies for the\n"
      "Switch's 720p: at 1080p or more they soften the whole image.\n"
      "Off: a sharp image (combine it with SMAA for the edges)."},
-    {"Mostrar FPS en la barra de título", "Show FPS in the title bar"}, {"Velocidad", "Speed"},
+    {"Mostrar FPS en la barra de título", "Show FPS"}, {"Velocidad", "Speed"},
     {"30 (como en Switch)", "30 (like Switch)"}, {"Sin límite", "Unlimited"},
     {"Más de 30: la velocidad del mundo, el reloj y las escenas no cambian (probado a 60 y 120);\n"
      "la cámara queda un poco más lejos. El V-Sync forzado en el panel de NVIDIA / AMD o el límite\n"
@@ -337,7 +339,7 @@ static const char *const k_en[][2] = {
     {"Gráficos", "Graphics"}, {"Controles", "Controls"}, {"Audio e idioma", "Audio and language"},
     {"Faltan los archivos del juego en targets/ (exefs y romfs de tu copia).", "The game files are missing in targets/ (exefs and romfs of your copy)."},
     {"Falta build/xcde.exe (compila el juego primero).", "build/xcde.exe is missing (build the game first)."},
-    {"Listo. Guardado: save/   Ajustes: xcde.ini", "Ready. Saves: save/   Settings: xcde.ini"},
+    {"Listo. Guardado: save/   Ajustes: " INI_FILE, "Ready. Saves: save/   Settings: " INI_FILE},
     {"Listo. La primera vez, JUGAR prepara los shaders antes (unos minutos)", "Ready. The first time, PLAY prepares the shaders first (a few minutes)"},
     {"Omitir", "Skip"}, {"Detener", "Stop"},
     {"Precompilación detenida (se puede seguir otro día: lo ya hecho se conserva)", "Precompilation stopped (it can go on another day: what's done is kept)"},
@@ -346,11 +348,11 @@ static const char *const k_en[][2] = {
      "a una zona no se detenga a compilarlos. Solo hace falta una vez (o tras actualizar el juego).",
      "Translates and compiles all of the game's shaders ahead of time, so the first visit to an\n"
      "area doesn't stop to compile them. Only needed once (or after updating the game)."},
-    {"Guardar ajustes", "Save settings"}, {"Ajustes guardados en xcde.ini", "Settings saved to xcde.ini"},
-    {"No se pudo escribir xcde.ini", "Could not write xcde.ini"}, {"Crear reporte", "Create report"},
-    {"Junta en un .zip los logs de las dos últimas partidas, xcde.ini y el último informe de\n"
+    {"Guardar ajustes", "Save settings"}, {"Ajustes guardados en " INI_FILE, "Settings saved to " INI_FILE},
+    {"No se pudo escribir " INI_FILE, "Could not write " INI_FILE}, {"Crear reporte", "Create report"},
+    {"Junta en un .zip los logs de las dos últimas partidas, " INI_FILE " y el último informe de\n"
      "cierre inesperado (sin partidas guardadas ni archivos del juego), para adjuntarlo a un reporte.",
-     "Puts in a .zip the logs of the last two sessions, xcde.ini and the latest crash report\n"
+     "Puts in a .zip the logs of the last two sessions, " INI_FILE " and the latest crash report\n"
      "(no saves or game files), to attach to a bug report."},
     {"Salir", "Quit"}, {"No se pudo iniciar build/xcde.exe (error ", "Could not start build/xcde.exe (error "},
     {"Juego iniciado. Registro: build/last_game.log", "Game started. Log: build/last_game.log"},
@@ -358,11 +360,11 @@ static const char *const k_en[][2] = {
     {"Buscando shaders en los archivos del juego...", "Looking for shaders in the game files..."},
     {"Preparando shaders antes de la primera partida (solo esta vez)", "Preparing shaders before the first game (only this time)"},
     {"Precompilando shaders", "Precompiling shaders"}, {"Variantes conocidas (semilla)…", "Known variants (seed)…"},
-    {"Archivos %llu de %llu · programas de shaders listos %llu de %llu", "Files %llu of %llu · shader programs ready %llu of %llu"},
+    {"Archivos %llu de %llu · programas de shaders listos %llu de %llu", "Files %llu of %llu · shader programs ready %llu de %llu"},
     {"El controlador gráfico falló en un shader: se salta y se sigue (intento ", "The graphics driver failed on a shader: it is skipped (attempt "},
     {"Shaders precompilados", "Shaders precompiled"},
     {"La precompilación falló (registro: build/last_precompile.log)", "Precompilation failed (log: build/last_precompile.log)"},
-    {"No hay nada que reportar todavía (ni logs ni xcde.ini)", "Nothing to report yet (no logs or xcde.ini)"},
+    {"No hay nada que reportar todavía (ni logs ni " INI_FILE ")", "Nothing to report yet (no logs or " INI_FILE ")"},
     {"No se pudo crear el reporte (falta tar.exe de Windows)", "Could not create the report (Windows' tar.exe is missing)"},
     {"No se pudo crear el reporte", "Could not create the report"}, {"Reporte creado: ", "Report created: "},
     {" (adjúntalo al reportar el problema)", " (attach it to the bug report)"},
@@ -390,7 +392,7 @@ static int find(const char *const *list, int n, const char *v) {
 static void load() {
     for (int i = 0; i < NPAD; i++) g.pad[i] = k_def_pad[i];
     for (int i = 0; i < NACT; i++) g.key[i] = k_def_key[i], g.key2[i] = k_def_key2[i];
-    FILE *f = fopen(path("xcde.ini").c_str(), "r");
+    FILE *f = fopen(path(INI_FILE).c_str(), "r");
     if (!f) return;
     int layout = 1;  // (bind_layout: an older file's keyboard lines are the old layout - the new defaults replace them)
     char line[512];
@@ -443,7 +445,7 @@ static void load() {
 }
 
 static bool save() {
-    FILE *f = fopen(path("xcde.ini").c_str(), "w");
+    FILE *f = fopen(path(INI_FILE).c_str(), "w");
     if (!f) return false;
     fprintf(f, "# " APP_NAME " settings (written by the launcher)\n");
     fprintf(f, "fullscreen = %d\nwindow = %s\nresolution = %s\nupscaler = %s\nantialias = %s\nshow_fps = %d\n", g.fullscreen,
@@ -485,7 +487,7 @@ static bool g_launched_ok;  // (launch() started the game: the launcher closes)
 static float g_scale = 1;
 
 static void launch() {
-    if (!save()) { g_status = T("No se pudo escribir xcde.ini"); return; }
+    if (!save()) { g_status = T("No se pudo escribir " INI_FILE); return; }
 #ifdef _WIN32
     std::string exe = path("build/xcde.exe");
     std::string cmd = "\"" + exe + "\" targets";
@@ -945,7 +947,7 @@ static void scan_mods() {
 // No saves or game files. Zipped by the tar.exe that Windows 10+ ships; the folder opens when it is done.
 static void make_report() {
     std::vector<std::string> files;
-    for (const char *f : {"build/lasrecomp.log", "build/lasrecomp.prev.log", "xcde.ini"})
+    for (const char *f : {"build/lasrecomp.log", "build/lasrecomp.prev.log", INI_FILE})
         if (GetFileAttributesA(path(f).c_str()) != INVALID_FILE_ATTRIBUTES) files.push_back(f);
     WIN32_FIND_DATAA fd;
     std::string newest;
@@ -959,7 +961,7 @@ static void make_report() {
         std::string dmp = "crash/" + newest.substr(0, newest.size() - 4) + ".dmp";
         if (GetFileAttributesA(path(dmp.c_str()).c_str()) != INVALID_FILE_ATTRIBUTES) files.push_back(dmp);
     }
-    if (files.empty()) { g_status = T("No hay nada que reportar todavía (ni logs ni xcde.ini)"); return; }
+    if (files.empty()) { g_status = T("No hay nada que reportar todavía (ni logs ni " INI_FILE ")"); return; }
     CreateDirectoryA(path("reports").c_str(), NULL);
     char stamp[32];
     time_t now = time(NULL);
@@ -1148,7 +1150,7 @@ int main(int argc, char **argv) {
         ImGui::Separator();
         if (!have_game) ImGui::TextColored(ImVec4(1, 0.4f, 0.4f, 1), "%s", T("Faltan los archivos del juego en targets/ (exefs y romfs de tu copia)."));
         else if (!have_exe) ImGui::TextColored(ImVec4(1, 0.4f, 0.4f, 1), "%s", T("Falta build/xcde.exe (compila el juego primero)."));
-        else ImGui::TextDisabled(T("%s"), g_status.empty() ? (pc_done() ? T("Listo. Guardado: save/   Ajustes: xcde.ini")
+        else ImGui::TextDisabled(T("%s"), g_status.empty() ? (pc_done() ? T("Listo. Guardado: save/   Ajustes: " INI_FILE)
                                                                    : T("Listo. La primera vez, JUGAR prepara los shaders antes (unos minutos)"))
                                                        : g_status.c_str());
         pc_poll();
@@ -1182,10 +1184,10 @@ int main(int argc, char **argv) {
                               "a una zona no se detenga a compilarlos. Solo hace falta una vez (o tras actualizar el juego)."));
         ImGui::EndDisabled();
         ImGui::SameLine();
-        if (ImGui::Button(T("Guardar ajustes"))) g_status = save() ? T("Ajustes guardados en xcde.ini") : T("No se pudo escribir xcde.ini");
+        if (ImGui::Button(T("Guardar ajustes"))) g_status = save() ? T("Ajustes guardados en " INI_FILE) : T("No se pudo escribir " INI_FILE);
         ImGui::SameLine();
         if (ImGui::Button(T("Crear reporte"))) make_report();
-        ImGui::SetItemTooltip(T("Junta en un .zip los logs de las dos últimas partidas, xcde.ini y el último informe de\n"
+        ImGui::SetItemTooltip(T("Junta en un .zip los logs de las dos últimas partidas, " INI_FILE " y el último informe de\n"
                               "cierre inesperado (sin partidas guardadas ni archivos del juego), para adjuntarlo a un reporte."));
         ImGui::SameLine();
         if (ImGui::Button(T("Salir"))) run = false;

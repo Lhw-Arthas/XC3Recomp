@@ -28,6 +28,15 @@ static SDL_Event q[256];
 static int q_n;
 static volatile bool open_, want_window;
 static bool fs_applied = false, fs_init;
+static volatile float cur_fps;
+static volatile bool want_title;
+static bool title_has_fps;
+
+#ifdef GAME_XCDE
+#define WIN_TITLE "Xenoblade Chronicles: Definitive Edition (Recomp)"
+#else
+#define WIN_TITLE "Xenoblade Chronicles 3 (Recomp)"
+#endif
 
 static bool is_input(Uint32 t) {
     switch (t) {
@@ -54,13 +63,30 @@ extern "C" bool menu_handle_event(const SDL_Event *e) {
 
 extern "C" bool menu_is_open(void) { return open_; }
 
+extern "C" void menu_set_fps(float fps) {
+    cur_fps = fps;
+    want_title = true;
+}
+
 extern "C" void menu_apply_window_requests(void *sdl_window) {
     if (!fs_init) { fs_init = true; fs_applied = g_settings.fullscreen; }
-    if (!want_window || !sdl_window) return;
-    want_window = false;
-    if (fs_applied != g_settings.fullscreen) {
-        SDL_SetWindowFullscreen((SDL_Window *)sdl_window, g_settings.fullscreen);
-        fs_applied = g_settings.fullscreen;
+    if (!sdl_window) return;
+    if (want_window) {
+        want_window = false;
+        if (fs_applied != g_settings.fullscreen) {
+            SDL_SetWindowFullscreen((SDL_Window *)sdl_window, g_settings.fullscreen);
+            fs_applied = g_settings.fullscreen;
+        }
+    }
+    if (g_settings.show_fps && want_title && cur_fps > 0) {
+        want_title = false;
+        char title[128];
+        snprintf(title, sizeof title, WIN_TITLE " - %.0f FPS", (double)cur_fps);
+        SDL_SetWindowTitle((SDL_Window *)sdl_window, title);
+        title_has_fps = true;
+    } else if (!g_settings.show_fps && title_has_fps) {
+        SDL_SetWindowTitle((SDL_Window *)sdl_window, WIN_TITLE);
+        title_has_fps = false;
     }
 }
 
@@ -149,6 +175,12 @@ static void feed(ImGuiIO &io, uint32_t w, uint32_t h) {
 
 // [XCDE] the menu's language follows the launcher's (xcde.ini launcher_lang; g_settings.ui_lang 1 = English): the
 // Spanish text is the key, T() gives the English one.
+#ifdef GAME_XCDE
+#define INI_FILE "xcde.ini"
+#else
+#define INI_FILE "xc3.ini"
+#endif
+
 static const char *const k_en[][2] = {
     {"Igual que la ventana (recomendado)", "Match the window (recommended)"}, {"1x - 720p (como Switch)", "1x - 720p (like Switch)"},
     {"75 % de la ventana", "75 % of the window"}, {"50 % de la ventana", "50 % of the window"},
@@ -163,12 +195,12 @@ static const char *const k_en[][2] = {
     {"Calidad", "Quality"}, {"Antialiasing SMAA", "SMAA anti-aliasing"}, {"(no se usa con FSR 3.1 / FSR 4 / DLSS)", "(not used with FSR 3.1 / FSR 4 / DLSS)"},
     {"Profundidad de campo", "Depth of field"},
     {"Antialiasing y desenfoque de movimiento del juego (al reiniciar)", "The game's anti-aliasing and motion blur (after a restart)"},
-    {"Mostrar FPS en la barra de título", "Show FPS in the title bar"}, {"Velocidad", "Speed"}, {"30 (como en Switch)", "30 (like Switch)"},
+    {"Mostrar FPS en la barra de título", "Show FPS"}, {"Velocidad", "Speed"}, {"30 (como en Switch)", "30 (like Switch)"},
     {"Sin límite", "Unlimited"}, {"FPS (al reiniciar)", "FPS (after a restart)"}, {"V-Sync (con 30 / 60 FPS)", "V-Sync (at 30 / 60 FPS)"},
     {"Volumen", "Volume"}, {"Audio de los vídeos (al reiniciar)", "Video sound (after a restart)"}, {"Controles", "Controls"},
     {"La asignación de teclas y botones se cambia en el launcher (Play Monado.bat), pestaña Controles.",
      "Keys and buttons are remapped in the launcher, Controls tab."},
-    {"Guardar", "Save"}, {"Volver al juego", "Back to the game"}, {"Guardado en xcde.ini", "Saved to xcde.ini"},
+    {"Guardar", "Save"}, {"Volver al juego", "Back to the game"}, {"Guardado en " INI_FILE, "Saved to " INI_FILE},
 };
 static const char *T(const char *es) {
     if (g_settings.ui_lang != 1) return es;
@@ -250,15 +282,32 @@ static void ui(void) {
     if (ImGui::Button(T("Guardar"))) { settings_save(); saved_note = true; }
     ImGui::SameLine();
     if (ImGui::Button(T("Volver al juego"))) { open_ = false; input_reset(); }
-    if (saved_note) { ImGui::SameLine(); ImGui::TextDisabled(T("Guardado en xcde.ini")); }
+    if (saved_note) { ImGui::SameLine(); ImGui::TextDisabled(T("Guardado en " INI_FILE)); }
     ImGui::End();
+}
+
+static void fps_overlay(void) {
+    ImGui::SetNextWindowPos(ImVec2(14.0f, 14.0f), ImGuiCond_Always);
+    ImGui::SetNextWindowBgAlpha(0.55f);
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 6.0f);
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(10.0f, 5.0f));
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 0.0f);
+    if (ImGui::Begin("##fps_overlay", nullptr,
+                     ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_AlwaysAutoResize |
+                     ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoFocusOnAppearing |
+                     ImGuiWindowFlags_NoNav | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoInputs)) {
+        ImGui::TextColored(ImVec4(0.95f, 0.95f, 0.95f, 1.0f), "%.0f FPS", (double)cur_fps);
+    }
+    ImGui::End();
+    ImGui::PopStyleVar(3);
 }
 
 extern "C" void menu_render(void *cmd, uint32_t w, uint32_t h) {
     static ImGuiContext *ctx;
     static float font_h;
     static uint64_t t_last;
-    if (!open_) return;
+    bool draw_fps = g_settings.show_fps && cur_fps > 0;
+    if (!open_ && !draw_fps) return;
     if (!ctx) {
         ctx = ImGui::CreateContext();
         ImGui::SetCurrentContext(ctx);
@@ -281,10 +330,11 @@ extern "C" void menu_render(void *cmd, uint32_t w, uint32_t h) {
     io.DeltaTime = t_last ? (float)((now - t_last) / 1e9) : 1.0f / 60;
     if (io.DeltaTime <= 0) io.DeltaTime = 1.0f / 60;
     t_last = now;
-    feed(io, w, h);
+    if (open_) feed(io, w, h);
     ImGui_ImplVulkan_NewFrame();
     ImGui::NewFrame();
-    ui();
+    if (draw_fps) fps_overlay();
+    if (open_) ui();
     ImGui::Render();
     ImGui_ImplVulkan_RenderDrawData(ImGui::GetDrawData(), (VkCommandBuffer)cmd);
 }
