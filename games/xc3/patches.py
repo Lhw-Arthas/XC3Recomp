@@ -29,22 +29,7 @@ def _original_then_w22_hook(fn):
     return emit
 
 
-def _original_then_s0_hook(fn):
-    """The original instruction (which must lift to plain C), then s0 = a runtime hook of s0's bits."""
-    def emit(gen, addr):
-        ins = gen.lift(addr)
-        if ins.kind != 'op':
-            raise ValueError(f'{addr:#x}: hook patch needs a plain instruction, got {ins.kind}')
-        return f'{ins.code} {{ extern uint32_t {fn}(uint32_t); c->v[0] = {fn}((uint32_t)c->v[0]); }}'
-    return emit
-
-
 PATCHES = {
-    # 60 / 120 fps: the frame duration getter (f_7001249b08: display period * interval, 0 reads as 2) - what the
-    # game's movement and animations step by. Interval 1 is 1/60 s, so at 120 fps they ran twice as fast;
-    # runtime/hle/framepace.c xc3_frame_dur scales it to the measured frame time in 60 / 120 fps gameplay.
-    0x7001249b60: Patch(0x1e210800, _original_then_s0_hook('xc3_frame_dur'), '120fps',
-                        'fmul s0, s0, s1 - frame duration = period * interval'),
     # 120 fps: the frame limiter (f_700124fa34) waits until the frame took display period * interval * 0.997, with
     # interval a whole number (main+0x1B42DB0, 1 = 60 fps). The 0.997 is built in w22 here (movz #0x3b64 + this movk);
     # runtime/hle/framepace.c xc3_limiter_k halves it at 120 fps outside cutscenes.

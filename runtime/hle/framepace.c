@@ -114,8 +114,7 @@ int xcde_present_fps(void) { return g_cut30 ? 30 : g_settings.fps; }
 // cutscene flag (1 in a cutscene). Outside cutscenes interval 1 and 1/60; in cutscenes the game's 2 and 1/30 (held at
 // 30 fps, presented at 30 - xcde_present_fps). Written each presented frame (device.c), as the cheat engine does.
 // 120 (FPS option 120 and above): interval 1 too, and the frame limiter's factor halved (xc3_limiter_k).
-static bool xc3_60;  // (this frame: 60 / 120 fps gameplay - xc3_ui_step, xc3_limiter_k, xc3_frame_dur)
-static float xc3_dur_scale = 1.0f;  // (xc3_frame_dur)
+static bool xc3_60;  // (this frame: 60 / 120 fps gameplay - xc3_ui_step, xc3_limiter_k)
 // the XC3 frame rate for the FPS option: 30, 60, or 120 (120, 144, 165, unlimited)
 static int xc3_fps_target(void) {
     static int t;
@@ -152,7 +151,6 @@ void xc3_fps_frame(void) {
         dt = dt < lo ? lo : dt > 1.0f / 30.0f ? 1.0f / 30.0f : dt;
     }
     *step = in_cut ? 1.0f / 30.0f : dt;
-    xc3_dur_scale = dt * 60.0f;  // (xc3_frame_dur: interval 1 = 1/60 s)
     {   // XC3_FPS_LOG=1: the step written, every 300 presents
         static int lg = -1;
         static uint64_t n;
@@ -173,17 +171,6 @@ uint32_t xc3_limiter_k(uint32_t k) {
     f *= 0.5f;
     memcpy(&k, &f, 4);
     return k;
-}
-// [XC3] games/xc3/patches.py, 0x7001249b60: the game's frame duration (display period * interval), which its movement
-// and animations step by. Interval 1 is 1/60 s: at 120 fps they ran twice as fast, and below 60 slower. In 60 / 120
-// fps gameplay it is scaled to the measured frame time (xc3_dur_scale: the world step's, x 60), as the world step.
-uint32_t xc3_frame_dur(uint32_t d) {
-    if (!xc3_60) return d;
-    float f;
-    memcpy(&f, &d, 4);
-    f *= xc3_dur_scale;
-    memcpy(&d, &f, 4);
-    return d;
 }
 // [XC3] the cheat's "UI Speed Fix" (games/xc3/patches.py, main+0x67370): at 60 / 120 fps the UI layout's frame step
 // ([layout + 0x214]) stays 1/30 - its 2D animations otherwise ran twice as fast
