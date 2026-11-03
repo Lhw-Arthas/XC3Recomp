@@ -77,7 +77,7 @@ void vk_collect_dead(void);
 
 // ================================================================== submissions
 // A submission = optional upload command buffer + the main one, signalling the timeline with its number.
-#define SUBS 8
+#define SUBS 32
 typedef struct {
     VkCommandBuffer main, upload;
     bool main_begun, upload_begun, ts;  // ts: GPU timestamps written (profiling)
@@ -304,7 +304,7 @@ static bool oq_enabled(void) {
 
 static void oq_begin(VkCommandBuffer cb) {  // (in a render pass, counting) open this pass's segment
     OccQ *q = &oq[cur_sub];
-    if (oq_open >= 0 || !q->pool || q->n >= OQ_MAX) return;
+    if (oq_slot != cur_sub || oq_open >= 0 || !q->pool || q->n >= OQ_MAX) return;
     vkCmdBeginQuery(cb, q->pool, q->n, 0);
     oq_open = (int)q->n++;
 }
@@ -664,9 +664,10 @@ VkDescriptorSet vk_alloc_set(VkDescriptorSetLayout layout) {
 // 64 MB host-visible chunks (device-local when the GPU exposes resizable BAR); a chunk is reused once every
 // submission that allocated from it has completed.
 #define CHUNK_SIZE (64ull << 20)
-typedef struct { VkBuffer buf; VmaAllocation mem; uint8_t *ptr; uint64_t size, used, seq; } Chunk;
+typedef struct { VkBuffer buf; VmaAllocation mem; uint8_t *ptr; uint64_t size, used, seq, exec_seq; } Chunk;
 static Chunk *chunks;
 static int nchunks, active = -1;
+static uint64_t exec_seq = 1;  // bumped per backend_execute command list
 static int ring_chunks(void) { return nchunks; }
 
 static int new_chunk(uint64_t size) {
@@ -697,6 +698,8 @@ static int new_chunk(uint64_t size) {
 
 static void ring_retire(void) {}  // chunks are recycled lazily in vk_transient
 
+static int last_transient_chunk;
+
 VkSpan vk_transient(uint64_t size, uint64_t align) {
     if (align < 16) align = 16;
     uint64_t pending = vk_pending_seq();
@@ -706,6 +709,8 @@ VkSpan vk_transient(uint64_t size, uint64_t align) {
         if (off + size <= c->size) {
             c->used = off + size;
             c->seq = pending;
+            c->exec_seq = exec_seq;
+            last_transient_chunk = active;
             stat_upload_bytes += size; hc_upload += size;
             return (VkSpan){c->buf, off, c->ptr + off};
         }
@@ -713,11 +718,13 @@ VkSpan vk_transient(uint64_t size, uint64_t align) {
     uint64_t done = vk_completed_seq();
     int pick = -1;
     for (int i = 0; i < nchunks; i++)
-        if (i != active && chunks[i].seq <= done && chunks[i].size >= size) { pick = i; break; }
+        if (i != active && chunks[i].seq <= done && chunks[i].exec_seq != exec_seq && chunks[i].size >= size) { pick = i; break; }
     if (pick < 0) pick = new_chunk(size > CHUNK_SIZE ? size : CHUNK_SIZE);
     active = pick;
     chunks[pick].used = size;
     chunks[pick].seq = pending;
+    chunks[pick].exec_seq = exec_seq;
+    last_transient_chunk = pick;
     stat_upload_bytes += size; hc_upload += size;
     return (VkSpan){chunks[pick].buf, 0, chunks[pick].ptr};
 }
@@ -772,19 +779,84 @@ static void watch_mem_note(const char *what, uint64_t dst, uint64_t n) {
     extern uint64_t vk_frame_counter(void);
     LOG("[watchmem] frame %llu: %s writes %llx +%llx%c", (unsigned long long)vk_frame_counter(), what, (unsigned long long)dst, (unsigned long long)n, 10);
 }
-// Guest memory copied once per submission: draws binding the same range share the copy.
+// Guest memory copied once per command list (or until invalidated by mid-list writes): draws binding the same range share the copy.
 #define GCOPY_TAB 4096
-static struct { uint64_t addr, size, seq; VkSpan span; } gcopy[GCOPY_TAB];
+static struct { uint64_t addr, size, seq; int chunk; VkSpan span; } gcopy[GCOPY_TAB];
+#define ICOPY_TAB 1024
+static struct { uint64_t addr, seq; uint32_t count, isz, restart, max_index; int chunk; VkSpan span; } icopy[ICOPY_TAB];
 static uint64_t gcopy_gen;  // bumped to drop every shared copy (guest memory written mid-list)
+static uint64_t gcopy_seq_now(void) { return exec_seq + (gcopy_gen << 40); }
 static void guest_copy_flush(void) { gcopy_gen++; }
-static VkSpan guest_copy(uint64_t addr, uint64_t size) {
-    uint64_t seq = vk_pending_seq() + (gcopy_gen << 40), h = (addr * 0x9E3779B97F4A7C15ull) ^ (size * 0xC2B2AE3D27D4EB4Full);
+static void guest_copy_invalidate(uint64_t addr, uint64_t size) {
+    uint64_t seq = gcopy_seq_now(), end = addr + size;
+    for (int i = 0; i < GCOPY_TAB; i++)
+        if (gcopy[i].seq == seq && gcopy[i].addr < end && gcopy[i].addr + gcopy[i].size > addr) gcopy[i].seq = 0;
+    for (int i = 0; i < ICOPY_TAB; i++)
+        if (icopy[i].seq == seq && icopy[i].addr < end && icopy[i].addr + (uint64_t)icopy[i].count * icopy[i].isz > addr) icopy[i].seq = 0;
+}
+static VkSpan icopy_lookup(uint64_t addr, uint32_t count, uint32_t isz, uint32_t restart, uint32_t *out_max) {
+    uint64_t seq = gcopy_seq_now(), h = (addr * 0x9E3779B97F4A7C15ull) ^ ((uint64_t)count * 0xC2B2AE3D27D4EB4Full);
+    uint32_t slot = (uint32_t)(h ^ (h >> 32)) & (ICOPY_TAB - 1);
+    for (int p = 0; p < 4; p++) {
+        uint32_t s = (slot + p) & (ICOPY_TAB - 1);
+        if (icopy[s].seq == seq && icopy[s].addr == addr && icopy[s].count == count && icopy[s].isz == isz && icopy[s].restart == restart) {
+            chunks[icopy[s].chunk].seq = vk_pending_seq();
+            *out_max = icopy[s].max_index;
+            return icopy[s].span;
+        }
+        if (icopy[s].seq != seq) { slot = s; break; }
+    }
+    const void *src = (const void *)(uintptr_t)addr;
+    VkSpan sp = vk_transient_copy(src, (uint64_t)count * isz + 4, 4);
+    uint32_t mx = 0;
+    if (isz == 2) { const uint16_t *s = src; for (uint32_t i = 0; i < count; i++) if (s[i] > mx && s[i] != (uint16_t)restart) mx = s[i]; }
+    else { const uint32_t *s = src; for (uint32_t i = 0; i < count; i++) if (s[i] > mx && s[i] != restart) mx = s[i]; }
+    icopy[slot].addr = addr; icopy[slot].seq = seq; icopy[slot].count = count; icopy[slot].isz = isz;
+    icopy[slot].restart = restart; icopy[slot].max_index = mx; icopy[slot].chunk = last_transient_chunk; icopy[slot].span = sp;
+    *out_max = mx;
+    return sp;
+}
+static VkSpan guest_copy_ex(uint64_t addr, uint64_t size, uint64_t max_size) {
+    uint64_t seq = gcopy_seq_now(), h = addr * 0x9E3779B97F4A7C15ull;
     uint32_t slot = (uint32_t)(h ^ (h >> 32)) & (GCOPY_TAB - 1);
-    if (gcopy[slot].seq == seq && gcopy[slot].addr == addr && gcopy[slot].size == size) return gcopy[slot].span;
+    bool growing = false;
+    for (int p = 0; p < 4; p++) {
+        uint32_t s = (slot + p) & (GCOPY_TAB - 1);
+        if (gcopy[s].seq == seq && gcopy[s].addr == addr) {
+            if (gcopy[s].size >= size) {
+                chunks[gcopy[s].chunk].seq = vk_pending_seq();
+                return gcopy[s].span;
+            }
+            slot = s;
+            growing = true;
+            break;
+        }
+        if (gcopy[s].seq != seq) { slot = s; break; }
+    }
+    if (growing && max_size > size) {
+        uint64_t want = size * 2 < 65536 ? 65536 : size * 2;
+        if (want > max_size) want = max_size;
+        if (want > (4ull << 20)) want = 4ull << 20;
+        if (want < size) want = size;
+        if (addr >= maxwell_pmem_base && addr < maxwell_pmem_base + maxwell_pmem_size) {
+            uint64_t psize;
+            const uint32_t *ptab;
+            if (kernel_pmem(&psize, &ptab) && ptab) {
+                uint64_t p0 = (addr - maxwell_pmem_base) / PLAT_PMEM_PAGE;
+                uint64_t p1 = (addr + want - 1 - maxwell_pmem_base) / PLAT_PMEM_PAGE, pm = p0;
+                while (pm <= p1 && ptab[pm]) pm++;
+                uint64_t mapped = pm > p0 ? (pm - p0) * PLAT_PMEM_PAGE - (addr & (PLAT_PMEM_PAGE - 1)) : 0;
+                if (want > mapped && mapped >= size) want = mapped;
+                else if (want > mapped) want = size;
+            }
+        }
+        size = want;
+    }
     VkSpan s = vk_transient_copy((const void *)(uintptr_t)addr, size, 256);
-    gcopy[slot].addr = addr; gcopy[slot].size = size; gcopy[slot].seq = seq; gcopy[slot].span = s;
+    gcopy[slot].addr = addr; gcopy[slot].size = size; gcopy[slot].seq = seq; gcopy[slot].chunk = last_transient_chunk; gcopy[slot].span = s;
     return s;
 }
+static VkSpan guest_copy(uint64_t addr, uint64_t size) { return guest_copy_ex(addr, size, size); }
 
 // ================================================================== worker threads (shader / pipeline builds)
 // First-use compiles run off the render thread; draws needing them are skipped until ready (as on Metal).
@@ -4614,7 +4686,7 @@ static uint64_t g_direct_limit;  // (T175) bytes the buffer guest_direct returne
 // in its place. The table holds NPMM mirrors; when full the one written longest ago is replaced. (48 filled up within
 // a minute of walking, after which new writers got none: foliage seen later drew black.)
 typedef struct { uint64_t base, size, wframe; VkBuffer buf; VmaAllocation mem; } PmMirror;
-#define NPMM 256
+#define NPMM 2048
 #define PMM_LIVE 2
 static PmMirror pmm[NPMM];
 static int npmm;
@@ -4627,6 +4699,7 @@ static void xpm_note(uint64_t lo, uint64_t hi) {
 static PmMirror *pmm_for(uint64_t lo, uint64_t hi) {  // the mirror holding [lo, hi), made (or grown) as needed
     for (int i = 0; i < npmm; i++)
         if (lo >= pmm[i].base && hi <= pmm[i].base + pmm[i].size) return &pmm[i];
+    if (vc_ndead) vc_free_dead(false);
     PmMirror *m = NULL;
     for (int i = 0; i < npmm && !m; i++)
         if (lo < pmm[i].base + pmm[i].size && hi > pmm[i].base) m = &pmm[i];  // overlapping: replaced by the union
@@ -4681,6 +4754,7 @@ static void pmm_refresh(void) {  // after a draw that wrote pm_pend (outside a r
     npm_pend = 0;
 }
 static bool pmem_direct(uint64_t addr, uint64_t size, VkBuffer *buf, VkDeviceSize *off) {
+    (void)size;
     uint64_t now = renderer_present_count();
     for (int i = 0; i < npmm; i++)
         if (addr >= pmm[i].base && addr < pmm[i].base + pmm[i].size && now - pmm[i].wframe <= PMM_LIVE) {
@@ -4695,7 +4769,7 @@ static bool guest_direct(uint64_t addr, uint64_t size, VkBuffer *buf, VkDeviceSi
     static int copy = -1;
     if (copy < 0) copy = getenv("LARECOMP_VK_COPY_VERTICES") != NULL;
     if (copy) return false;
-    if (addr < HEAP_BASE) return npmm && pmem_direct(addr, size, buf, off);
+    if (addr < HEAP_BASE) return pmem_direct(addr, size, buf, off);
     if (addr + size > HEAP_BASE + gmem_size && kernel_heap_size() != gmem_tried) { gmem_tried = kernel_heap_size(); gmem_info(); }
     if (!gmem_buf || addr + size > HEAP_BASE + gmem_size) return false;
     g_direct_limit = ~0ull;
@@ -5075,7 +5149,7 @@ static void dispatch_compute(uint32_t gx, uint32_t gy, uint32_t gz) {
     vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_COMPUTE, cp->p.layout, 0, 1, &ds, 0, NULL);
     vkCmdDispatch(cb, gx, gy, gz);
     if (cp->si->uses_gmem_map && cp->si->uses_gmem_store) gfast_finish(cb);
-    if (cp->si->uses_gmem_store) { vc_mark_sbufs(5); if (nwant) xsh_stored(5); }
+    if (cp->si->uses_gmem_store) { vc_mark_sbufs(5); if (nwant) xsh_stored(5); if (npm_pend) pmm_refresh(); }
     stat_dispatches++;
 }
 
@@ -5919,9 +5993,7 @@ static void draw_(CmdRec *r, bool indexed) {
             if (iaddr % isz == 0 && guest_direct(iaddr, (uint64_t)count * isz, &ib.buf, &ib.off)) {
                 scan_src = src; scan_isz = isz; scan_restart = restart;  // max_index only if a stream gets copied
             } else {
-                ib = vk_transient_copy(src, (uint64_t)count * isz + 4, 4);
-                if (isz == 2) { const uint16_t *s = src; for (uint32_t i = 0; i < count; i++) if (s[i] > max_index && s[i] != (uint16_t)restart) max_index = s[i]; }
-                else { const uint32_t *s = src; for (uint32_t i = 0; i < count; i++) if (s[i] > max_index && s[i] != restart) max_index = s[i]; }
+                ib = icopy_lookup(iaddr, count, isz, restart, &max_index);
             }
         } else if (native) {  // 8-bit indices: widen to 16
             ib = vk_transient((uint64_t)count * 2 + 4, 4);
@@ -5989,7 +6061,11 @@ static void draw_(CmdRec *r, bool indexed) {
             else need = (uint64_t)max_index * stride + 256;
             if (v.size && need > v.size) need = v.size;
             if (!v.addr) { static const uint8_t zero[256]; sp = vk_transient_copy(zero, 256, 16); }
-            else { sp = guest_copy(v.addr, need ? need : 16); span_size = need ? need : 16; }
+            else {
+                uint64_t req = need ? need : 16;
+                sp = guest_copy_ex(v.addr, req, v.size > req ? v.size : req);
+                span_size = req;
+            }
         }
         VkDeviceSize off = sp.off;
         if (!g_vk.robust2) span_size = VK_WHOLE_SIZE;
@@ -7162,7 +7238,7 @@ static void exec_list(uint64_t handle, int depth) {
         case CMD_UPDATE_UNIFORM_BUFFER:
             watch_mem_note("inline uniform update", r->x[0] + r->x[2], r->x[3]);
             memcpy((void *)(uintptr_t)(r->x[0] + r->x[2]), x, r->x[3]);
-            guest_copy_flush();  // (cbuf copies shared within the submission are stale now)
+            guest_copy_invalidate(r->x[0] + r->x[2], r->x[3]);  // (only cbuf copies overlapping the written range are stale)
             break;
         case CMD_FENCE_SYNC: {
             static int fence_flush = -1;
@@ -7234,6 +7310,7 @@ static void exec_list(uint64_t handle, int depth) {
             renderer_flush();
             watch_mem_note("buffer copy", r->x[1], r->x[2]);
             memmove((void *)(uintptr_t)r->x[1], (void *)(uintptr_t)r->x[0], r->x[2]);
+            guest_copy_invalidate(r->x[1], r->x[2]);
             break;
         default: {  // [XCDE] commands this executor does not implement: say so (once per type) instead of dropping them silently
             static uint32_t told[4]; static uint64_t cnt[128];
@@ -7431,6 +7508,7 @@ void backend_queue_present(NvnTexture *t) { rq_push(RJ_PRESENT, (uint64_t)(uintp
 void backend_queue_destroy(NvnTexture *t) { rq_push(RJ_DESTROY, (uint64_t)(uintptr_t)t); }
 
 void backend_execute(uint64_t handle) {
+    exec_seq++;
     split_since = 0;
     PROF_T0();
     exec_list(handle, 0);

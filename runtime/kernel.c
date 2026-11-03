@@ -213,14 +213,29 @@ static bool pmem_init(void) {
     return true;
 }
 
+static int pmem_free_desc(const void *a, const void *b) {
+    uint32_t x = *(const uint32_t *)a, y = *(const uint32_t *)b;
+    return (x < y) - (x > y);
+}
+
 static uint32_t pmem_map(uint64_t addr, uint64_t size) {
     uint64_t lo = addr & ~(PLAT_PMEM_PAGE - 1), need = 0;
     for (uint64_t a = lo; a < addr + size; a += PLAT_PMEM_PAGE) need += !pmem_ptab[(a - ALIAS_BASE) / PLAT_PMEM_PAGE];
-    if (need > pmem_nfree + (pmem_size / PLAT_PMEM_PAGE - pmem_next)) return 0x10801;  // (the heap shrank since)
+    uint64_t pool_pages = pmem_size / PLAT_PMEM_PAGE;
+    if (need > pmem_nfree + (pool_pages - pmem_next)) return 0x10801;  // (the heap shrank since)
+    // Prefer a contiguous ascending run in pmem_buf so GPU vertex/index fetches can read pmem_buf directly (exec.c pmem_direct).
+    bool free_contig = false;
+    if (need > 1 && pmem_nfree >= need) {
+        free_contig = true;
+        uint32_t base_pg = pmem_free[pmem_nfree - 1];
+        for (uint64_t k = 1; k < need; k++)
+            if (pmem_free[pmem_nfree - 1 - k] != base_pg + (uint32_t)k) { free_contig = false; break; }
+    }
+    bool use_tail = need > 1 && !free_contig && pmem_next + need <= pool_pages;
     for (uint64_t a = lo; a < addr + size; a += PLAT_PMEM_PAGE) {
         uint64_t g = (a - ALIAS_BASE) / PLAT_PMEM_PAGE;
         if (!pmem_ptab[g]) {
-            uint32_t pg = pmem_nfree ? pmem_free[--pmem_nfree] : (uint32_t)pmem_next++;
+            uint32_t pg = (!use_tail && pmem_nfree) ? pmem_free[--pmem_nfree] : (uint32_t)pmem_next++;
             if (!plat_pmem_map(a, (uint64_t)pg * PLAT_PMEM_PAGE)) FATAL("physical memory pool: page %llx not mapped\n", (unsigned long long)a);
             pmem_ptab[g] = pg + 1;
         }
@@ -231,6 +246,7 @@ static uint32_t pmem_map(uint64_t addr, uint64_t size) {
 }
 
 static void pmem_unmap(uint64_t addr, uint64_t size) {
+    uint32_t n0 = pmem_nfree;
     for (uint64_t a = addr & ~(PLAT_PMEM_PAGE - 1); a < addr + size; a += PLAT_PMEM_PAGE) {
         uint64_t g = (a - ALIAS_BASE) / PLAT_PMEM_PAGE;
         if (!pmem_ptab[g]) continue;
@@ -241,6 +257,13 @@ static void pmem_unmap(uint64_t addr, uint64_t size) {
         plat_pmem_unmap(a);
         pmem_free[pmem_nfree++] = pmem_ptab[g] - 1;
         pmem_ptab[g] = 0;
+    }
+    if (pmem_nfree > n0) {
+        qsort(pmem_free, pmem_nfree, sizeof pmem_free[0], pmem_free_desc);
+        while (pmem_nfree && pmem_free[0] == pmem_next - 1) {
+            pmem_next--;
+            memmove(pmem_free, pmem_free + 1, (--pmem_nfree) * sizeof pmem_free[0]);
+        }
     }
 }
 
