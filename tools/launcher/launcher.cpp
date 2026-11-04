@@ -376,6 +376,30 @@ static const char *const k_en[][2] = {
     {"No se pudo crear el reporte", "Could not create the report"}, {"Reporte creado: ", "Report created: "},
     {" (adjúntalo al reportar el problema)", " (attach it to the bug report)"},
     {"Idioma del launcher", "Launcher language"},
+    // [XC3] tab "Instalación y build" (tab_build)
+    {"Instalación y build", "Install & build"}, {"Archivos del juego", "Game files"}, {"Compilación", "Build"},
+    {"Comprobando los archivos del juego...", "Checking the game files..."},
+    {"Listos: Xenoblade Chronicles 3, versión 2.2.0 (targets/)", "Ready: Xenoblade Chronicles 3, version 2.2.0 (targets/)"},
+    {"Hace falta la versión 2.2.0 (el juego base con la actualización 2.2.0)", "Version 2.2.0 is needed (the base game with the 2.2.0 update)"},
+    {"Faltan archivos del romfs o son distintos (copia incompleta)", "Some romfs files are missing or different (an incomplete copy)"},
+    {"Son paquetes (.xci / .nsp / .nca): hacen falta las carpetas exefs y romfs", "Those are packages (.xci / .nsp / .nca): the exefs and romfs folders are needed"},
+    {"No hay archivos del juego en targets/", "No game files in targets/"},
+    {"Elegir archivos del juego...", "Choose game files..."},
+    {"Elige la carpeta que contiene las carpetas exefs y romfs de tu copia del juego.",
+     "Choose the folder that holds the exefs and romfs folders of your copy of the game."},
+    {"Archivos del juego listos", "Game files ready"},
+    {"Esa carpeta no sirve (registro: build/setup_game_files.log)", "That folder does not work (log: build/setup_game_files.log)"},
+    {"No se pudo abrir el selector (error ", "Could not open the folder picker (error "},
+    {"Faltan las herramientas de compilación: ejecuta Build XC3.bat una vez (las instala).",
+     "The build tools are missing: run Build XC3.bat once (it installs them)."},
+    {"Recompila el código del juego y compila el runtime y el launcher (unos minutos; la primera vez, 10-20).",
+     "Recompiles the game code and builds the runtime and the launcher (a few minutes; the first time 10-20)."},
+    {"Paso %d de 5", "Step %d of 5"}, {"Cerrar el launcher detiene la compilación.", "Closing the launcher stops the build."},
+    {"Compilar / actualizar", "Build / update"}, {"Abrir registro", "Open log"},
+    {"Vuelve a abrir el launcher para usar la versión nueva.", "Reopen the launcher to use the new version."},
+    {"No se pudo iniciar la compilación (error ", "Could not start the build (error "},
+    {"Compilando...", "Building..."}, {"Compilación detenida", "Build stopped"}, {"Compilación terminada", "Build finished"},
+    {"La compilación falló (registro: build/build_all.log)", "The build failed (log: build/build_all.log)"},
 };
 static const char *T(const char *es) {
     if (g.ui_lang != 1) return es;
@@ -768,6 +792,188 @@ static void pc_poll() {
     g_status = code == 0 && pc_done() ? T("Shaders precompilados") : T("La precompilación falló (registro: build/last_precompile.log)");
     if (g_pc_then_play) g_pc_play_now = true;
 #endif
+}
+
+// ------------------------------------------------------------------ install & build ([XC3] tab "Instalación y build")
+// What Build XC3.bat does after the tools are installed, from the launcher: the game files (tools/setup_game_files.ps1:
+// the folder dialog, the check, the targets\ junctions; check_dump.py for the state shown) and the build
+// (scripts/build_all.sh in Git Bash, its "=== k/5" lines as the progress; build/build_all.log). The tools themselves
+// (MSYS2, Python, Git) are installed by Build XC3.bat only. The build runs in a job object: Stop and closing the
+// launcher end it with everything it started. The launcher's own exe is swapped by tools/launcher/build.sh (renamed,
+// not overwritten): the new one runs from the next start.
+static HANDLE g_bd_proc, g_bd_job, g_gf_proc, g_gf_pick;
+static int g_bd_step, g_gf_code = -2;  // (game files: -2 not checked, -1 checking, else check_dump.py's exit code)
+static std::string g_bd_line;
+static bool g_bd_new_launcher;
+static FILETIME g_self_time;
+
+static std::string bd_bash() {
+    std::string c[2];
+    if (const char *p = getenv("ProgramFiles")) c[0] = std::string(p) + "\\Git\\bin\\bash.exe";
+    if (const char *p = getenv("LOCALAPPDATA")) c[1] = std::string(p) + "\\Programs\\Git\\bin\\bash.exe";
+    for (auto &s : c) if (!s.empty() && GetFileAttributesA(s.c_str()) != INVALID_FILE_ATTRIBUTES) return s;
+    return "";
+}
+static bool bd_tools_ok() {
+    return !bd_bash().empty() && exists(".venv/Scripts/python.exe") &&
+           GetFileAttributesA("C:\\msys64\\ucrt64\\lib\\libSDL3.dll.a") != INVALID_FILE_ATTRIBUTES;
+}
+static bool bd_running() { return g_bd_proc != NULL; }
+static bool gf_busy() { return g_gf_proc != NULL || g_gf_pick != NULL; }
+
+// a hidden process in the repository root, its output in <log> (msys64 on the PATH, as Build XC3.bat)
+static HANDLE bd_spawn(const std::string &exe, const std::string &args, const char *log, HANDLE job) {
+    const char *old = getenv("PATH");
+    std::string p = std::string("C:\\msys64\\ucrt64\\bin;") + (old ? old : "");
+    SetEnvironmentVariableA("PATH", p.c_str());
+    CreateDirectoryA(path("build").c_str(), NULL);
+    STARTUPINFOA si = {};
+    si.cb = sizeof si;
+    PROCESS_INFORMATION pi = {};
+    SECURITY_ATTRIBUTES sa = {sizeof sa, NULL, TRUE};
+    HANDLE h = CreateFileA(path(log).c_str(), GENERIC_WRITE, FILE_SHARE_READ | FILE_SHARE_WRITE, &sa, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
+    if (h != INVALID_HANDLE_VALUE) {
+        si.dwFlags = STARTF_USESTDHANDLES;
+        si.hStdOutput = si.hStdError = h;
+        si.hStdInput = GetStdHandle(STD_INPUT_HANDLE);
+    }
+    std::string cmd = "\"" + exe + "\" " + args;
+    std::vector<char> buf(cmd.begin(), cmd.end());
+    buf.push_back(0);
+    BOOL ok = CreateProcessA(exe.c_str(), buf.data(), NULL, NULL, TRUE, CREATE_NO_WINDOW | (job ? CREATE_SUSPENDED : 0), NULL,
+                             g_root.c_str(), &si, &pi);
+    if (h != INVALID_HANDLE_VALUE) CloseHandle(h);
+    if (!ok) return NULL;
+    if (job) { AssignProcessToJobObject(job, pi.hProcess); ResumeThread(pi.hThread); }
+    CloseHandle(pi.hThread);
+    return pi.hProcess;
+}
+
+static void gf_check() {
+    if (gf_busy() || !exists(".venv/Scripts/python.exe")) return;
+    g_gf_proc = bd_spawn(path(".venv/Scripts/python.exe"), "-X utf8 tools\\extract\\check_dump.py targets", "build/check_dump.log", NULL);
+    g_gf_code = g_gf_proc ? -1 : -2;
+}
+static void gf_pick() {
+    if (gf_busy() || bd_running()) return;
+    char sys[MAX_PATH] = "";
+    GetSystemDirectoryA(sys, sizeof sys);
+    std::string ps = std::string(sys) + "\\WindowsPowerShell\\v1.0\\powershell.exe";
+    g_gf_pick = bd_spawn(ps, "-NoProfile -ExecutionPolicy Bypass -File tools\\setup_game_files.ps1", "build/setup_game_files.log", NULL);
+    if (!g_gf_pick) g_status = std::string(T("No se pudo abrir el selector (error ")) + std::to_string(GetLastError()) + ")";
+}
+
+static void bd_start() {
+    if (bd_running() || pc_running() || gf_busy()) return;
+    std::string bash = bd_bash();
+    if (bash.empty()) return;
+    if (!g_bd_job) {
+        g_bd_job = CreateJobObjectA(NULL, NULL);
+        JOBOBJECT_EXTENDED_LIMIT_INFORMATION li = {};
+        li.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+        if (g_bd_job) SetInformationJobObject(g_bd_job, JobObjectExtendedLimitInformation, &li, sizeof li);
+    }
+    g_bd_proc = bd_spawn(bash, "-c \"scripts/build_all.sh\"", "build/build_all.log", g_bd_job);
+    if (!g_bd_proc) { g_status = std::string(T("No se pudo iniciar la compilación (error ")) + std::to_string(GetLastError()) + ")"; return; }
+    g_bd_step = 0;
+    g_bd_line.clear();
+    g_status = T("Compilando...");
+}
+static void bd_stop() {
+    if (!g_bd_proc) return;
+    if (g_bd_job) TerminateJobObject(g_bd_job, 1);
+    WaitForSingleObject(g_bd_proc, 3000);
+    CloseHandle(g_bd_proc);
+    g_bd_proc = NULL;
+    g_status = T("Compilación detenida");
+}
+
+static void bd_poll() {
+    DWORD code = 1;
+    if (g_gf_proc && WaitForSingleObject(g_gf_proc, 0) == WAIT_OBJECT_0) {
+        GetExitCodeProcess(g_gf_proc, &code);
+        CloseHandle(g_gf_proc);
+        g_gf_proc = NULL;
+        g_gf_code = (int)code;
+    }
+    if (g_gf_pick && WaitForSingleObject(g_gf_pick, 0) == WAIT_OBJECT_0) {
+        GetExitCodeProcess(g_gf_pick, &code);
+        CloseHandle(g_gf_pick);
+        g_gf_pick = NULL;
+        if (code == 0) g_status = T("Archivos del juego listos");
+        else if (code != 2) g_status = T("Esa carpeta no sirve (registro: build/setup_game_files.log)");
+        gf_check();
+    }
+    if (!g_bd_proc) return;
+    static Uint64 last;
+    Uint64 now = SDL_GetTicks();
+    if (now - last < 300) return;
+    last = now;
+    if (FILE *f = fopen(path("build/build_all.log").c_str(), "rb")) {  // the last 16 KB: the current step, the last line
+        fseek(f, 0, SEEK_END);
+        long n = ftell(f), from = n > 16384 ? n - 16384 : 0;
+        std::string t((size_t)(n - from), '\0');
+        fseek(f, from, SEEK_SET);
+        t.resize(fread(&t[0], 1, t.size(), f));
+        fclose(f);
+        size_t s = t.rfind("=== ");
+        if (s != std::string::npos && s + 5 < t.size() && t[s + 4] >= '1' && t[s + 4] <= '5') g_bd_step = t[s + 4] - '0';
+        size_t e = t.find_last_not_of("\r\n ");
+        if (e != std::string::npos) {
+            size_t b = t.find_last_of('\n', e);
+            g_bd_line = t.substr(b == std::string::npos ? 0 : b + 1, e - (b == std::string::npos ? 0 : b + 1) + 1);
+            if (g_bd_line.size() > 140) g_bd_line = g_bd_line.substr(0, 140) + "...";
+        }
+    }
+    if (WaitForSingleObject(g_bd_proc, 0) != WAIT_OBJECT_0) return;
+    GetExitCodeProcess(g_bd_proc, &code);
+    CloseHandle(g_bd_proc);
+    g_bd_proc = NULL;
+    g_status = code == 0 ? T("Compilación terminada") : T("La compilación falló (registro: build/build_all.log)");
+    char me[MAX_PATH];
+    WIN32_FILE_ATTRIBUTE_DATA a;
+    if (GetModuleFileNameA(NULL, me, sizeof me) && GetFileAttributesExA(me, GetFileExInfoStandard, &a))
+        g_bd_new_launcher = CompareFileTime(&a.ftLastWriteTime, &g_self_time) != 0;
+    std::string cur = path("build/xenoblade3_launcher.exe");  // (the swapped-in exe has this name; ours was renamed)
+    if (GetFileAttributesExA(cur.c_str(), GetFileExInfoStandard, &a)) g_bd_new_launcher |= CompareFileTime(&a.ftLastWriteTime, &g_self_time) > 0;
+}
+
+static void tab_build() {
+    section(T("Archivos del juego"));
+    if (g_gf_code == -2) gf_check();
+    if (g_gf_code == -1 || g_gf_proc) ImGui::TextDisabled("%s", T("Comprobando los archivos del juego..."));
+    else if (g_gf_code == 0) ImGui::TextColored(pal::accent, "%s", T("Listos: Xenoblade Chronicles 3, versión 2.2.0 (targets/)"));
+    else ImGui::TextColored(pal::warn, "%s", g_gf_code == 4 ? T("Hace falta la versión 2.2.0 (el juego base con la actualización 2.2.0)")
+                                           : g_gf_code == 5 ? T("Faltan archivos del romfs o son distintos (copia incompleta)")
+                                           : g_gf_code == 2 ? T("Son paquetes (.xci / .nsp / .nca): hacen falta las carpetas exefs y romfs")
+                                                            : T("No hay archivos del juego en targets/"));
+    ImGui::BeginDisabled(gf_busy() || bd_running());
+    if (ImGui::Button(T("Elegir archivos del juego..."))) gf_pick();
+    ImGui::EndDisabled();
+    ImGui::SetItemTooltip(T("Elige la carpeta que contiene las carpetas exefs y romfs de tu copia del juego."));
+    section(T("Compilación"));
+    bool tools = bd_tools_ok();
+    if (!tools) {
+        ImGui::TextColored(pal::warn, "%s", T("Faltan las herramientas de compilación: ejecuta Build XC3.bat una vez (las instala)."));
+        return;
+    }
+    ImGui::TextDisabled("%s", T("Recompila el código del juego y compila el runtime y el launcher (unos minutos; la primera vez, 10-20)."));
+    if (bd_running()) {
+        char t[64];
+        snprintf(t, sizeof t, T("Paso %d de 5"), g_bd_step ? g_bd_step : 1);
+        ImGui::ProgressBar((g_bd_step ? g_bd_step - 1 : 0) / 5.0f + 0.1f, ImVec2(-150 * g_scale, 0), t);
+        ImGui::SameLine();
+        if (ImGui::Button(T("Detener"), ImVec2(-1, 0))) bd_stop();
+        ImGui::TextDisabled("%s", g_bd_line.c_str());
+        ImGui::TextDisabled("%s", T("Cerrar el launcher detiene la compilación."));
+    } else {
+        ImGui::BeginDisabled(pc_running() || gf_busy() || g_gf_code != 0);
+        if (ImGui::Button(T("Compilar / actualizar"))) bd_start();
+        ImGui::EndDisabled();
+        ImGui::SameLine();
+        if (ImGui::Button(T("Abrir registro"))) ShellExecuteA(NULL, "open", path("build/build_all.log").c_str(), NULL, NULL, SW_SHOWNORMAL);
+        if (g_bd_new_launcher) ImGui::TextColored(pal::accent, "%s", T("Vuelve a abrir el launcher para usar la versión nueva."));
+    }
 }
 
 // ------------------------------------------------------------------ remapping capture
@@ -1183,6 +1389,8 @@ int main(int argc, char **argv) {
     const char *shot = argc > 2 && !strcmp(argv[1], "--shot") ? argv[2] : NULL;
     int shot_tab = argc > 3 ? atoi(argv[3]) : 0, frame_no = 0;
     bool shot_pc = shot && argc > 4 && !strcmp(argv[4], "precompile");  // (... <tab> precompile: the bar after ~5 s of a run)
+    // [XC3] ... <tab> build: the build's bar after ~5 s; ... <tab> build-wait: the tab once the build has ended
+    bool shot_bd = shot && argc > 4 && !strcmp(argv[4], "build"), shot_bd_wait = shot && argc > 4 && !strcmp(argv[4], "build-wait");
     g_llog = fopen((g_root + "\\build\\launcher.log").c_str(), "w");
     SetUnhandledExceptionFilter(crash_filter);
     llog("launcher start, root %s", g_root.c_str());
@@ -1232,10 +1440,16 @@ int main(int argc, char **argv) {
     ImGui_ImplSDLRenderer3_Init(ren);
     if (exists("mods/launcher/background.png")) theme_load_background(ren, path("mods/launcher/background.png"));
     load();
+    {   // (the launcher's own exe as it started: a build that replaced it says so - bd_poll)
+        char me[MAX_PATH];
+        WIN32_FILE_ATTRIBUTE_DATA a;
+        if (GetModuleFileNameA(NULL, me, sizeof me) && GetFileAttributesExA(me, GetFileExInfoStandard, &a)) g_self_time = a.ftLastWriteTime;
+    }
     bool have_game = exists("targets/exefs/main") || exists("targets/exefs");
     bool have_exe = exists("build/xcde.exe");
     bool run = true, launched = false;
     if (shot_pc) pc_start(false);
+    bool shot_bd_started = false;
     while (run) {
         SDL_Event e;
         while (SDL_PollEvent(&e)) {
@@ -1280,11 +1494,15 @@ int main(int argc, char **argv) {
 #ifdef GAME_XCDE
             if (ImGui::BeginTabItem(T("Mods"), NULL, f3)) { tab_mods(); ImGui::EndTabItem(); }
 #else
-            (void)f3;
+            if (ImGui::BeginTabItem(T("Instalación y build"), NULL, f3)) { tab_build(); ImGui::EndTabItem(); }  // [XC3]
 #endif
             ImGui::EndTabBar();
         }
         ImGui::EndChild();
+        bd_poll();
+        have_game = exists("targets/exefs/main") || exists("targets/exefs");  // (the tab may have set them up / built it)
+        have_exe = exists("build/xcde.exe");
+        if ((shot_bd || shot_bd_wait) && !shot_bd_started && g_gf_code == 0) { shot_bd_started = true; bd_start(); }
         if (!have_game) ImGui::TextColored(pal::warn, "%s", T("Faltan los archivos del juego en targets/ (exefs y romfs de tu copia)."));
         else if (!have_exe) ImGui::TextColored(pal::warn, "%s", T("Falta build/xcde.exe (compila el juego primero)."));
         else ImGui::TextDisabled(T("%s"), g_status.empty() ? (pc_done() ? T("Listo. Guardado: save/   Ajustes: " INI_FILE)
@@ -1306,7 +1524,7 @@ int main(int argc, char **argv) {
             launched = g_launched_ok;
             if (launched) run = false;
         }
-        ImGui::BeginDisabled(!have_game || !have_exe || launched || pc_running());
+        ImGui::BeginDisabled(!have_game || !have_exe || launched || pc_running() || bd_running());
         if (play_button(T("JUGAR"), ImVec2(240 * scale, play_h))) {
             if (!pc_done()) pc_start(true);
             else { launch(); launched = g_launched_ok; if (launched) run = false; }
@@ -1330,7 +1548,8 @@ int main(int argc, char **argv) {
         SDL_SetRenderDrawColor(ren, 6, 10, 20, 255);
         SDL_RenderClear(ren);
         ImGui_ImplSDLRenderer3_RenderDrawData(ImGui::GetDrawData(), ren);
-        if (shot && ++frame_no == (shot_pc ? 300 : 5)) {
+        bool shot_now = shot_bd_wait ? shot_bd_started && !bd_running() && ++frame_no > 5 : shot && ++frame_no == (shot_pc || shot_bd ? 300 : 5);
+        if (shot && shot_now) {
             SDL_Surface *sf = SDL_RenderReadPixels(ren, NULL);
             if (sf) { SDL_SaveBMP(sf, shot); SDL_DestroySurface(sf); }
             run = false;
@@ -1338,6 +1557,7 @@ int main(int argc, char **argv) {
         SDL_RenderPresent(ren);
     }
     if (!launched) pc_stop();  // (closing the launcher stops a precompilation; what it wrote is kept)
+    bd_stop();                 // [XC3] (and a build: build_all.sh starts again from its first step next time)
     ImGui_ImplSDLRenderer3_Shutdown();
     ImGui_ImplSDL3_Shutdown();
     ImGui::DestroyContext();

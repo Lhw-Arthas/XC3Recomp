@@ -57,9 +57,13 @@ Done:
 - In game: cursor hidden while the window has the focus (`658faa1`); SMAA skipped while FSR / DLSS runs (`f0ad94e`).
 - `scripts/build_all.sh`: dump check, recompilation, build; shader precompilation.
 
+- Launcher tab "Install & build": the game files (folder picker, version check, `targets\` junctions) and the build
+  (`build_all.sh` with a step bar, Stop, log), the launcher swapping its own exe (renamed, not overwritten). The tools
+  are installed by `Build XC3.bat` (first time only).
+
 Open:
-- Choosing the user's game files and the install folder from the launcher.
-- Local extraction and preparation, recompilation and shader processing driven by the launcher.
+- Choosing an install folder other than the repository.
+- Extraction from the user's own game packages (today: already extracted `exefs` / `romfs` folders only).
 - Updates and DLC: everything (patches, hooks, addresses) is tied to 2.2.0; another version means finding every
   address again.
 - Installation management.

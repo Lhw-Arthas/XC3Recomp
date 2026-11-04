@@ -19,5 +19,13 @@ if [ -z "$GF" ]; then
   RES=build/launcher/launcher.res
   .venv/Scripts/python -m ziglang rc -- tools/launcher/launcher.rc $RES || exit 1
 fi
-$Z -o $OUT build/launcher/*.o $RES $M/lib/libSDL3.dll.a -march=x86_64_v2 -Wl,--subsystem,windows -static-libstdc++ 2> build/launcher/link.err
-rc=$?; [ $rc = 0 ] || cat build/launcher/link.err | head -20; exit $rc
+# [XC3] linked under a new name, then swapped in: Windows refuses to overwrite a running exe (the launcher rebuilding
+# itself from its "Install & build" tab, or Build XC3.bat with the launcher open) but lets it be renamed
+NEW=${OUT%.exe}.new.exe OLD=${OUT%.exe}.old.exe
+$Z -o $NEW build/launcher/*.o $RES $M/lib/libSDL3.dll.a -march=x86_64_v2 -Wl,--subsystem,windows -static-libstdc++ 2> build/launcher/link.err
+rc=$?; [ $rc = 0 ] || { cat build/launcher/link.err | head -20; exit $rc; }
+rm -f $OLD ${OLD%.exe}.pdb 2>/dev/null
+[ -f $OUT ] && { mv -f $OUT $OLD 2>/dev/null; [ -f ${OUT%.exe}.pdb ] && mv -f ${OUT%.exe}.pdb ${OLD%.exe}.pdb 2>/dev/null; }
+mv -f $NEW $OUT || exit 1
+[ -f ${NEW%.exe}.pdb ] && mv -f ${NEW%.exe}.pdb ${OUT%.exe}.pdb
+exit 0
