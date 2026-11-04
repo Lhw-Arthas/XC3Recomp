@@ -1,0 +1,79 @@
+# XC3Recomp roadmap
+
+The plan for the native Windows port of *Xenoblade Chronicles 3* (version 2.2.0, build ID `82D187FE9EF9BE92`).
+Each phase lists what is done and what is open; update it when an item lands (commit hash) or a new one is found.
+Status as of 2026-11-04.
+
+## Phase 1: Native Windows development
+
+Status: **in progress**.
+
+Done:
+- Static recompilation of `main` / `sdk` into C (`generated/`), linked into `build/xcde.exe` (`scripts/build_all.sh`).
+- Kernel / HLE services, the alias region backed by a physical memory pool imported into Vulkan.
+- Vulkan renderer: Maxwell shaders translated to SPIR-V, precompiled shader cache, pipeline cache.
+- FSR 3.1 / FSR 4 in place of the game's own temporal upscale (DLSS path present, untested: AMD GPU).
+- Input (pad, keyboard, mouse), audio, movies, saves (with a backup per launch).
+
+Open:
+- Black / red box by the Colony 9 waterfall: one draw (vs `61e0c6ed00`, fs `61e0c6f400`, G-buffer albedo pure red).
+  Not caused by the alias-region pool reads (checked with `XC3_PMM_MIRROR=1`, deterministic replay). Cause open.
+- `nvnCommandBufferDrawTransformFeedback` not emulated (called in Colony 9).
+- Vulkan executor: command 50 unimplemented.
+- About 17 fragment shaders failed to translate (older note, to be rechecked).
+
+## Phase 2: Gameplay compatibility and optimization
+
+Status: **partially underway**.
+
+Done:
+- FPS option 30 / 60 (60 = the community 60 FPS patch, ported; cutscenes stay at 30). 120 was tried and dropped:
+  movement ran too fast.
+- Alias-region streams read from the pool in place (`59be42a`): Colony 9 at the 30 option 18 -> 29 fps (capped),
+  GPU 37 -> 12 ms per frame.
+- Session recording without capture freezes (`3e8e0ca`).
+
+Open:
+- Test beyond the title screen, opening and Colony 9: Everblight canyon, battles, long cutscenes, other regions.
+- Frame lag experiment (`XC3_FRAME_LAG=1`, uncommitted): 60 option ~49 -> ~60 fps in one replay; needs a live check
+  for flicker and input latency.
+- Render-thread CPU cost (~2.7 us per draw), ~800 pass splits per frame (writer draws + game barriers), ~75 hitches
+  per replay (mostly loading).
+- Validate save loading and story progression; stability across areas.
+
+How it is tested: the user records a session from the launcher ("Record the session" -> `play/<timestamp>`, a save
+backup in `save/backup/`); it is replayed hidden on a scratch copy of the save (`LARECOMP_SAVE_DIR`). Replays are not
+deterministic: A/B comparisons of images use `XCDE_DETERMINISTIC=1` (+ `XCDE_TMP_DETERMINISTIC=1` to keep FSR on);
+performance is measured without it (it changes the timing).
+
+## Phase 3: Launcher and installation
+
+Status: **planned, early work done** (lower priority than phases 1 and 2).
+
+Done:
+- `tools/launcher`: graphics, upscaler, FPS, controls, button prompts, language, session recording, reports.
+- `scripts/build_all.sh`: dump check, recompilation, build; shader precompilation.
+
+Open:
+- Choosing the user's game files and the install folder from the launcher.
+- Local extraction and preparation, recompilation and shader processing driven by the launcher.
+- Updates and DLC: everything (patches, hooks, addresses) is tied to 2.2.0; another version means finding every
+  address again.
+- Installation management.
+
+## Phase 4: Public source and testing
+
+Status: **planned**.
+
+Before publishing:
+- Audit the repository **and its git history** for anything derived from the game: `dump/`, `targets/`,
+  `generated/`, caches, saves, `play/` recordings, screenshots (`.gitignore` covers them today; history must be checked
+  too - a file once committed stays in it).
+- Check the licences of third-party code and SDKs for redistribution (`LICENSE`, `NOTICE.md`): LASRecomp / Monado,
+  FidelityFX SDK, Streamline / DLSS, SDL.
+- No Nintendo / Monolith Soft assets or branding in the repository or test builds.
+- README for XC3 (today's README describes Monado / XCDE).
+
+Then:
+- Build and installation documentation; test builds; issue reporting and contribution guidelines
+  (`CONTRIBUTING.md` exists, written for Monado).
