@@ -6794,7 +6794,9 @@ float vk_frame_clear[4];       // (device.c: the window image's clear colour thi
 static VkImageView post_process(VkCommandBuffer cb, TexBackend *b, double ow_d, double oh_d) {
     VkImageView v = raw_view(b);
     fg_scene = VK_NULL_HANDLE;
-    bool smaa = g_settings.antialias == AA_SMAA;
+    // [XC3] not with FSR 3.1 / FSR 4 / DLSS running (they anti-alias already; SMAA here, after the HUD, only softened
+    // the HUD text): measured on Colony 9 with FSR 4 native, SMAA changed 0.2% of the pixels clearly
+    bool smaa = g_settings.antialias == AA_SMAA && !tmp_enabled();
     uint32_t ow = (uint32_t)lround(ow_d), oh = (uint32_t)lround(oh_d);
     if (ow > 16384) ow = 16384;
     if (oh > 16384) oh = 16384;

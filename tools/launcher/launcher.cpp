@@ -250,6 +250,7 @@ static const char *const k_en[][2] = {
      "Meant for playing at 60 on a 60 Hz monitor. Applied when the game starts."},
     {"Se aplica cuando la resolución interna es menor que la ventana.", "Applies when the internal resolution is below the window."},
     {"Calidad", "Quality"}, {"Antialiasing SMAA", "SMAA anti-aliasing"},
+    {"(no se usa con FSR 3.1 / FSR 4 / DLSS)", "(not used with FSR 3.1 / FSR 4 / DLSS)"},
     {"Profundidad de campo (desenfoque del juego)", "Depth of field (the game's blur)"},
     {"El desenfoque de lo cercano y lo lejano que el juego aplica también en Switch.\n"
      "Desactivado: toda la escena nítida (y algo menos de trabajo para la GPU).",
@@ -882,8 +883,11 @@ static void tab_graphics() {
     } else if (g.upscaler < 2) {  // ([XC3] the temporal ones: nothing more)
         ImGui::TextDisabled(T("Se aplica cuando la resolución interna es menor que la ventana."));
     }
-    ImGui::SeparatorText(T("Calidad"));
+    section(T("Calidad"));
+    ImGui::BeginDisabled(g.upscaler >= 2);  // [XC3] FSR 3.1 / DLSS / FSR 4 (k_ups_ini): SMAA is not used with them
     ImGui::Checkbox(T("Antialiasing SMAA"), &g.smaa);
+    ImGui::EndDisabled();
+    if (g.upscaler >= 2) ImGui::SameLine(), ImGui::TextDisabled(T("(no se usa con FSR 3.1 / FSR 4 / DLSS)"));
 #ifdef GAME_XCDE
     ImGui::Checkbox(T("Profundidad de campo (desenfoque del juego)"), &g.dof);
     ImGui::SetItemTooltip(T("El desenfoque de lo cercano y lo lejano que el juego aplica también en Switch.\n"

@@ -267,7 +267,9 @@ static void ui(void) {
             }
             ImGui::SeparatorText(T("Calidad"));
             bool smaa = g_settings.antialias == AA_SMAA;
+            ImGui::BeginDisabled(UPSCALE_TEMPORAL(g_settings.upscaler));  // [XC3] (exec.c post_process: not with them)
             if (ImGui::Checkbox(T("Antialiasing SMAA"), &smaa)) g_settings.antialias = smaa ? AA_SMAA : AA_OFF;
+            ImGui::EndDisabled();
             if (UPSCALE_TEMPORAL(g_settings.upscaler)) ImGui::SameLine(), ImGui::TextDisabled(T("(no se usa con FSR 3.1 / FSR 4 / DLSS)"));
             bool dof = !g_settings.dof_off;
             if (ImGui::Checkbox(T("Profundidad de campo"), &dof)) g_settings.dof_off = !dof;
