@@ -494,6 +494,110 @@ static std::string g_status;
 static bool g_launched_ok;  // (launch() started the game: the launcher closes)
 static float g_scale = 1;
 
+// ================================================================== look ([XC3]: dark blue, ether-cyan accent)
+// Every colour of the launcher is here. The background is drawn (theme_background): a gradient with soft cyan glows
+// and arcs, or mods/launcher/background.png when it exists (any image of the user's: mods/ is never committed),
+// darkened so the settings stay readable.
+namespace pal {
+static const ImVec4 bg_top(0.035f, 0.055f, 0.105f, 1), bg_bottom(0.02f, 0.03f, 0.06f, 1);
+static const ImVec4 card(0.07f, 0.11f, 0.19f, 0.86f), card_border(0.20f, 0.32f, 0.50f, 0.55f);
+static const ImVec4 frame(0.12f, 0.18f, 0.29f, 1), frame_hover(0.16f, 0.24f, 0.38f, 1), frame_active(0.19f, 0.29f, 0.46f, 1);
+static const ImVec4 frame_border(0.27f, 0.40f, 0.60f, 0.70f), tab_selected(0.13f, 0.23f, 0.38f, 1);
+static const ImVec4 accent(0.25f, 0.83f, 0.96f, 1), accent_hover(0.45f, 0.90f, 1.0f, 1), accent_dim(0.16f, 0.52f, 0.70f, 1);
+static const ImVec4 text(0.90f, 0.94f, 0.98f, 1), muted(0.56f, 0.64f, 0.75f, 1), on_accent(0.02f, 0.06f, 0.12f, 1);
+static const ImVec4 button(0.11f, 0.18f, 0.30f, 1), button_hover(0.16f, 0.27f, 0.44f, 1), button_active(0.20f, 0.34f, 0.55f, 1);
+static const ImVec4 warn(1.0f, 0.45f, 0.42f, 1);
+}
+static ImFont *g_font_bold, *g_font_title;
+static SDL_Texture *g_bg_tex;
+static float g_bg_w, g_bg_h;
+
+static void theme_apply(ImGuiStyle &st) {
+    ImGui::StyleColorsDark(&st);
+    st.WindowRounding = 0; st.ChildRounding = 10; st.FrameRounding = 6; st.PopupRounding = 8; st.GrabRounding = 6;
+    st.TabRounding = 6; st.ScrollbarRounding = 8;
+    st.WindowPadding = ImVec2(18, 14); st.FramePadding = ImVec2(10, 6); st.ItemSpacing = ImVec2(10, 9);
+    st.ItemInnerSpacing = ImVec2(8, 6); st.ScrollbarSize = 12; st.WindowBorderSize = 0; st.ChildBorderSize = 1;
+    st.FrameBorderSize = 1; st.TabBorderSize = 0; st.TabBarBorderSize = 1; st.TabBarOverlineSize = 2;
+    st.SeparatorTextBorderSize = 1; st.SeparatorTextPadding = ImVec2(0, 4); st.SeparatorTextAlign = ImVec2(0, 0.5f);
+    ImVec4 *c = st.Colors;
+    c[ImGuiCol_Text] = pal::text; c[ImGuiCol_TextDisabled] = pal::muted;
+    c[ImGuiCol_WindowBg] = ImVec4(0, 0, 0, 0); c[ImGuiCol_ChildBg] = pal::card; c[ImGuiCol_PopupBg] = ImVec4(0.05f, 0.08f, 0.15f, 0.98f);
+    c[ImGuiCol_Border] = pal::frame_border; c[ImGuiCol_Separator] = pal::card_border;
+    c[ImGuiCol_FrameBg] = pal::frame; c[ImGuiCol_FrameBgHovered] = pal::frame_hover; c[ImGuiCol_FrameBgActive] = pal::frame_active;
+    c[ImGuiCol_Button] = pal::button; c[ImGuiCol_ButtonHovered] = pal::button_hover; c[ImGuiCol_ButtonActive] = pal::button_active;
+    c[ImGuiCol_Header] = ImVec4(0.14f, 0.26f, 0.42f, 1); c[ImGuiCol_HeaderHovered] = ImVec4(0.18f, 0.33f, 0.52f, 1);
+    c[ImGuiCol_HeaderActive] = ImVec4(0.22f, 0.40f, 0.62f, 1);
+    c[ImGuiCol_CheckMark] = pal::accent; c[ImGuiCol_SliderGrab] = pal::accent_dim; c[ImGuiCol_SliderGrabActive] = pal::accent;
+    c[ImGuiCol_Tab] = ImVec4(0, 0, 0, 0); c[ImGuiCol_TabHovered] = pal::button_hover; c[ImGuiCol_TabSelected] = pal::tab_selected;
+    c[ImGuiCol_TabSelectedOverline] = pal::accent; c[ImGuiCol_TabDimmed] = ImVec4(0, 0, 0, 0);
+    c[ImGuiCol_TabDimmedSelected] = pal::tab_selected; c[ImGuiCol_TabDimmedSelectedOverline] = pal::accent;
+    c[ImGuiCol_ScrollbarBg] = ImVec4(0, 0, 0, 0); c[ImGuiCol_ScrollbarGrab] = pal::button; c[ImGuiCol_ScrollbarGrabHovered] = pal::button_hover;
+    c[ImGuiCol_ScrollbarGrabActive] = pal::button_active; c[ImGuiCol_PlotHistogram] = pal::accent;
+    c[ImGuiCol_NavHighlight] = pal::accent;
+    c[ImGuiCol_TableHeaderBg] = pal::tab_selected; c[ImGuiCol_TableRowBgAlt] = ImVec4(1, 1, 1, 0.025f);
+    c[ImGuiCol_TableBorderStrong] = pal::card_border; c[ImGuiCol_TableBorderLight] = ImVec4(0.20f, 0.32f, 0.50f, 0.30f);
+}
+
+// a section title in the tabs (was ImGui::SeparatorText): bold, accent colour
+static void section(const char *label) {
+    if (g_font_bold) ImGui::PushFont(g_font_bold);
+    ImGui::PushStyleColor(ImGuiCol_Text, pal::accent);
+    ImGui::SeparatorText(label);
+    ImGui::PopStyleColor();
+    if (g_font_bold) ImGui::PopFont();
+}
+
+static void theme_load_background(SDL_Renderer *ren, const std::string &path) {
+    SDL_Surface *s = SDL_LoadPNG(path.c_str());
+    if (!s) return;
+    g_bg_tex = SDL_CreateTextureFromSurface(ren, s);
+    g_bg_w = (float)s->w; g_bg_h = (float)s->h;
+    SDL_DestroySurface(s);
+}
+
+static void theme_background(void) {
+    ImDrawList *dl = ImGui::GetBackgroundDrawList();
+    const ImGuiViewport *vp = ImGui::GetMainViewport();
+    ImVec2 a = vp->Pos, b(vp->Pos.x + vp->Size.x, vp->Pos.y + vp->Size.y);
+    float w = vp->Size.x, h = vp->Size.y;
+    ImU32 top = ImGui::GetColorU32(pal::bg_top), bot = ImGui::GetColorU32(pal::bg_bottom);
+    dl->AddRectFilledMultiColor(a, b, top, top, bot, bot);
+    if (g_bg_tex) {  // (cover: fills the window, cropped at the long side)
+        float k = std::max(w / g_bg_w, h / g_bg_h), iw = g_bg_w * k, ih = g_bg_h * k;
+        ImVec2 p(a.x + (w - iw) * 0.5f, a.y + (h - ih) * 0.5f);
+        dl->AddImage((ImTextureID)(intptr_t)g_bg_tex, p, ImVec2(p.x + iw, p.y + ih));
+        dl->AddRectFilledMultiColor(a, b, IM_COL32(4, 8, 18, 150), IM_COL32(4, 8, 18, 150), IM_COL32(3, 5, 12, 225), IM_COL32(3, 5, 12, 225));
+        return;
+    }
+    // soft glows (stacked translucent discs) and thin arcs
+    ImVec2 g1(a.x + w * 0.86f, a.y + h * 0.08f), g2(a.x + w * 0.06f, a.y + h * 0.98f);
+    for (int i = 10; i > 0; i--) {
+        dl->AddCircleFilled(g1, h * 0.09f * i, IM_COL32(64, 200, 245, 3), 64);
+        dl->AddCircleFilled(g2, h * 0.07f * i, IM_COL32(40, 120, 255, 3), 64);
+    }
+    for (int i = 0; i < 4; i++) {
+        float r = h * (0.55f + 0.16f * i);
+        dl->PathArcTo(ImVec2(a.x + w * 1.02f, a.y - h * 0.10f), r, 1.62f, 2.95f, 96);
+        dl->PathStroke(IM_COL32(90, 215, 250, 26 - i * 5), 0, (2.0f - 0.35f * i) * g_scale);
+    }
+}
+
+// the big call to action (PLAY): accent fill, dark bold text
+static bool play_button(const char *label, ImVec2 size) {
+    ImGui::PushStyleColor(ImGuiCol_Button, pal::accent);
+    ImGui::PushStyleColor(ImGuiCol_ButtonHovered, pal::accent_hover);
+    ImGui::PushStyleColor(ImGuiCol_ButtonActive, pal::accent_dim);
+    ImGui::PushStyleColor(ImGuiCol_Text, pal::on_accent);
+    ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, 8 * g_scale);
+    if (g_font_bold) ImGui::PushFont(g_font_bold);
+    bool r = ImGui::Button(label, size);
+    if (g_font_bold) ImGui::PopFont();
+    ImGui::PopStyleVar();
+    ImGui::PopStyleColor(4);
+    return r;
+}
+
 static void launch() {
     if (!save()) { g_status = T("No se pudo escribir " INI_FILE); return; }
 #ifdef _WIN32
@@ -718,11 +822,11 @@ static bool capture_event(const SDL_Event &e) {
 
 // ------------------------------------------------------------------ UI
 static void tab_graphics() {
-    ImGui::SeparatorText(T("Pantalla"));
+    section(T("Pantalla"));
     ImGui::Checkbox(T("Pantalla completa"), &g.fullscreen);
     ImGui::SetNextItemWidth(260 * g_scale);
     ImGui::Combo(T("Tamaño de la ventana"), &g.win, k_wins, 5);
-    ImGui::SeparatorText(T("Resolución y escalado"));
+    section(T("Resolución y escalado"));
     ImGui::SetNextItemWidth(360 * g_scale);
     ImGui::Combo(T("Resolución interna"), &g.res, TL(k_res_ui, 7).p, 7);
     ImGui::TextDisabled(T(RES_HINT));
@@ -790,7 +894,7 @@ static void tab_graphics() {
                           "Desactivado: imagen nítida (combínalo con SMAA para los bordes)."));
 #endif
     ImGui::Checkbox(T("Mostrar FPS en la barra de título"), &g.show_fps);
-    ImGui::SeparatorText(T("Velocidad"));
+    section(T("Velocidad"));
     static const char *fps_ui[] = {"30 (como en Switch)", "60", "120", "144", "165", "Sin límite"};
 #ifndef GAME_XCDE
     // [XC3] 30 / 60 only (runtime/hle/framepace.c xc3_fps_frame: the 60 fps cheat's interval and frame time)
@@ -822,7 +926,7 @@ static void tab_graphics() {
                           "monitor de 60 Hz cada imagen dura exactamente dos refrescos).\n"
                           "Con 'Generación de frames solo en cinemáticas' también van a 30, con generación encima."));
 #else
-    ImGui::SeparatorText(T("Depuración"));  // [XC3]
+    section(T("Depuración"));  // [XC3]
     ImGui::Checkbox(T("Grabar la sesión (capturas, entradas y registro en play/)"), &g.record);
     ImGui::SetItemTooltip(T("Como scripts/play.sh: una captura cada 5 s, las entradas (input.txt, para repetirlas) y el registro (game.log)\n"
                           "en play/<fecha_hora>/. Envía esa carpeta si algo falla."));
@@ -1026,11 +1130,11 @@ static void tab_mods() {
 }
 
 static void tab_audio() {
-    ImGui::SeparatorText(T("Audio"));
+    section(T("Audio"));
     ImGui::SetNextItemWidth(300 * g_scale);
     ImGui::SliderInt(T("Volumen"), &g.volume, 0, 200, "%d%%");
     ImGui::Checkbox(T("Sonido de los vídeos"), &g.movie_audio);
-    ImGui::SeparatorText(T("Idioma del juego"));
+    section(T("Idioma del juego"));
     ImGui::SetNextItemWidth(260 * g_scale);
     ImGui::Combo(T("Idioma"), &g.lang, TL(k_lang_ui, 7).p, 7);
     ImGui::TextDisabled(T("Textos del juego. Solo los idiomas que incluya tu copia; si uno falla, vuelve a Inglés."));
@@ -1078,6 +1182,10 @@ int main(int argc, char **argv) {
     g_llog = fopen((g_root + "\\build\\launcher.log").c_str(), "w");
     SetUnhandledExceptionFilter(crash_filter);
     llog("launcher start, root %s", g_root.c_str());
+#ifndef GAME_XCDE
+    SDL_SetHint(SDL_HINT_WINDOWS_INTRESOURCE_ICON, "1");  // [XC3] the window's icon: resource 1 (launcher.rc)
+    SDL_SetHint(SDL_HINT_WINDOWS_INTRESOURCE_ICON_SMALL, "1");
+#endif
     if (!SDL_Init(SDL_INIT_VIDEO | SDL_INIT_GAMEPAD)) {
         llog("SDL_Init with gamepads failed (%s): video only", SDL_GetError());
         if (!SDL_Init(SDL_INIT_VIDEO)) return fail("Could not start SDL (video).");
@@ -1103,15 +1211,22 @@ int main(int argc, char **argv) {
     SDL_SetWindowSize(win, (int)(980 * scale), (int)(680 * scale));
     SDL_SetWindowPosition(win, SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED);
     if (!shot) SDL_ShowWindow(win);
-    if (!io.Fonts->AddFontFromFileTTF("C:\\Windows\\Fonts\\segoeui.ttf", 17.0f * scale)) io.Fonts->AddFontDefault();
-    ImGui::StyleColorsDark();
+    {   // fonts: Segoe UI (text), Segoe UI Bold (section titles, PLAY), Bahnschrift (the title); each only if present
+        auto font = [&](const char *file, float size) -> ImFont * {
+            std::string p = std::string("C:\\Windows\\Fonts\\") + file;
+            return GetFileAttributesA(p.c_str()) != INVALID_FILE_ATTRIBUTES ? io.Fonts->AddFontFromFileTTF(p.c_str(), size * scale) : NULL;
+        };
+        if (!font("segoeui.ttf", 17)) io.Fonts->AddFontDefault();
+        g_font_bold = font("segoeuib.ttf", 17);
+        g_font_title = font("bahnschrift.ttf", 34);
+        if (!g_font_title) g_font_title = font("segoeuib.ttf", 30);
+    }
     ImGuiStyle &st = ImGui::GetStyle();
-    st.WindowRounding = 0; st.FrameRounding = 4; st.FramePadding = ImVec2(8, 5); st.ItemSpacing = ImVec2(10, 8);
+    theme_apply(st);
     st.ScaleAllSizes(scale);
-    st.Colors[ImGuiCol_Button] = ImVec4(0.18f, 0.35f, 0.55f, 1);
-    st.Colors[ImGuiCol_ButtonHovered] = ImVec4(0.25f, 0.47f, 0.72f, 1);
     ImGui_ImplSDL3_InitForSDLRenderer(win, ren);
     ImGui_ImplSDLRenderer3_Init(ren);
+    if (exists("mods/launcher/background.png")) theme_load_background(ren, path("mods/launcher/background.png"));
     load();
     bool have_game = exists("targets/exefs/main") || exists("targets/exefs");
     bool have_exe = exists("build/xcde.exe");
@@ -1128,17 +1243,18 @@ int main(int argc, char **argv) {
         ImGui_ImplSDLRenderer3_NewFrame();
         ImGui_ImplSDL3_NewFrame();
         ImGui::NewFrame();
+        theme_background();
         const ImGuiViewport *vp = ImGui::GetMainViewport();
         ImGui::SetNextWindowPos(vp->WorkPos);
         ImGui::SetNextWindowSize(vp->WorkSize);
         ImGui::Begin("main", NULL, ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoSavedSettings);
-        ImGui::SetWindowFontScale(1.5f);
+        if (g_font_title) ImGui::PushFont(g_font_title);
 #ifdef GAME_XCDE
-        ImGui::TextColored(ImVec4(0.55f, 0.85f, 1, 1), "Xenoblade Chronicles: Definitive Edition");
+        ImGui::TextColored(pal::accent, "Xenoblade Chronicles: Definitive Edition");
 #else
-        ImGui::TextColored(ImVec4(0.55f, 0.85f, 1, 1), APP_NAME);  // [XC3]
+        ImGui::TextColored(pal::accent, APP_NAME);  // [XC3]
 #endif
-        ImGui::SetWindowFontScale(1.0f);
+        if (g_font_title) ImGui::PopFont();
         ImGui::TextDisabled("%s", T("Recompilación nativa para PC · configuración"));
         {   // [XCDE] the launcher's own language (Spanish / English), saved with the settings
             static const char *ll[] = {"Español", "English"};
@@ -1146,8 +1262,10 @@ int main(int argc, char **argv) {
             ImGui::SetNextItemWidth(150 * scale);
             ImGui::Combo(T("Idioma del launcher"), &g.ui_lang, ll, 2);
         }
-        float bottom = ImGui::GetFrameHeightWithSpacing() * (pc_running() ? 3.3f : 2.2f);
-        ImGui::BeginChild("tabs", ImVec2(0, -bottom));
+        ImGui::Dummy(ImVec2(0, 4 * scale));
+        float play_h = ImGui::GetFrameHeight() * 1.45f;
+        float bottom = ImGui::GetFrameHeightWithSpacing() * (pc_running() ? 2.4f : 1.3f) + play_h + st.ItemSpacing.y;
+        ImGui::BeginChild("tabs", ImVec2(0, -bottom), ImGuiChildFlags_Borders | ImGuiChildFlags_AlwaysUseWindowPadding);
         if (ImGui::BeginTabBar("t")) {
             ImGuiTabItemFlags f0 = shot && shot_tab == 0 ? ImGuiTabItemFlags_SetSelected : 0, f1 = shot && shot_tab == 1 ? ImGuiTabItemFlags_SetSelected : 0,
                               f2 = shot && shot_tab == 2 ? ImGuiTabItemFlags_SetSelected : 0;
@@ -1163,9 +1281,8 @@ int main(int argc, char **argv) {
             ImGui::EndTabBar();
         }
         ImGui::EndChild();
-        ImGui::Separator();
-        if (!have_game) ImGui::TextColored(ImVec4(1, 0.4f, 0.4f, 1), "%s", T("Faltan los archivos del juego en targets/ (exefs y romfs de tu copia)."));
-        else if (!have_exe) ImGui::TextColored(ImVec4(1, 0.4f, 0.4f, 1), "%s", T("Falta build/xcde.exe (compila el juego primero)."));
+        if (!have_game) ImGui::TextColored(pal::warn, "%s", T("Faltan los archivos del juego en targets/ (exefs y romfs de tu copia)."));
+        else if (!have_exe) ImGui::TextColored(pal::warn, "%s", T("Falta build/xcde.exe (compila el juego primero)."));
         else ImGui::TextDisabled(T("%s"), g_status.empty() ? (pc_done() ? T("Listo. Guardado: save/   Ajustes: " INI_FILE)
                                                                    : T("Listo. La primera vez, JUGAR prepara los shaders antes (unos minutos)"))
                                                        : g_status.c_str());
@@ -1186,30 +1303,27 @@ int main(int argc, char **argv) {
             if (launched) run = false;
         }
         ImGui::BeginDisabled(!have_game || !have_exe || launched || pc_running());
-        ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.15f, 0.55f, 0.3f, 1));
-        ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.2f, 0.7f, 0.4f, 1));
-        if (ImGui::Button(T("JUGAR"), ImVec2(200 * scale, 0))) {
+        if (play_button(T("JUGAR"), ImVec2(240 * scale, play_h))) {
             if (!pc_done()) pc_start(true);
             else { launch(); launched = g_launched_ok; if (launched) run = false; }
         }
-        ImGui::PopStyleColor(2);
         ImGui::SameLine();
-        if (ImGui::Button(T("Precompilar shaders"))) pc_start(false);
+        if (ImGui::Button(T("Precompilar shaders"), ImVec2(0, play_h))) pc_start(false);
         if (ImGui::IsItemHovered())
             ImGui::SetTooltip(T("Traduce y compila todos los shaders del juego por adelantado, para que la primera visita\n"
                               "a una zona no se detenga a compilarlos. Solo hace falta una vez (o tras actualizar el juego)."));
         ImGui::EndDisabled();
         ImGui::SameLine();
-        if (ImGui::Button(T("Guardar ajustes"))) g_status = save() ? T("Ajustes guardados en " INI_FILE) : T("No se pudo escribir " INI_FILE);
+        if (ImGui::Button(T("Guardar ajustes"), ImVec2(0, play_h))) g_status = save() ? T("Ajustes guardados en " INI_FILE) : T("No se pudo escribir " INI_FILE);
         ImGui::SameLine();
-        if (ImGui::Button(T("Crear reporte"))) make_report();
+        if (ImGui::Button(T("Crear reporte"), ImVec2(0, play_h))) make_report();
         ImGui::SetItemTooltip(T("Junta en un .zip los logs de las dos últimas partidas, " INI_FILE " y el último informe de\n"
                               "cierre inesperado (sin partidas guardadas ni archivos del juego), para adjuntarlo a un reporte."));
         ImGui::SameLine();
-        if (ImGui::Button(T("Salir"))) run = false;
+        if (ImGui::Button(T("Salir"), ImVec2(0, play_h))) run = false;
         ImGui::End();
         ImGui::Render();
-        SDL_SetRenderDrawColor(ren, 18, 20, 26, 255);
+        SDL_SetRenderDrawColor(ren, 6, 10, 20, 255);
         SDL_RenderClear(ren);
         ImGui_ImplSDLRenderer3_RenderDrawData(ImGui::GetDrawData(), ren);
         if (shot && ++frame_no == (shot_pc ? 300 : 5)) {

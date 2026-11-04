@@ -1,0 +1,2 @@
+// [XC3] the launcher icon (tools/launcher/make_icon.py); resource 1 = the exe icon and the window class icon (SDL)
+1 ICON "icon.ico"

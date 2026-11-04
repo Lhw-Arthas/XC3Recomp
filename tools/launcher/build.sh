@@ -14,5 +14,10 @@ for f in $I/imgui.cpp $I/imgui_draw.cpp $I/imgui_tables.cpp $I/imgui_widgets.cpp
   [ "$f" -nt "$o" ] || [ ! -f "$o" ] || [ "$f" = tools/launcher/launcher.cpp ] || continue  # (launcher.cpp: the game define may have changed)
   $Z -c $f -o $o -O2 -march=x86_64_v2 -std=c++17 -I$I -I$I/backends -idirafter $M/include $GF -w || exit 1
 done
-$Z -o $OUT build/launcher/*.o $M/lib/libSDL3.dll.a -march=x86_64_v2 -Wl,--subsystem,windows -static-libstdc++ 2> build/launcher/link.err
+RES=""  # [XC3] the icon (tools/launcher/make_icon.py -> icon.ico, launcher.rc); XCDE has none
+if [ -z "$GF" ]; then
+  RES=build/launcher/launcher.res
+  .venv/Scripts/python -m ziglang rc -- tools/launcher/launcher.rc $RES || exit 1
+fi
+$Z -o $OUT build/launcher/*.o $RES $M/lib/libSDL3.dll.a -march=x86_64_v2 -Wl,--subsystem,windows -static-libstdc++ 2> build/launcher/link.err
 rc=$?; [ $rc = 0 ] || cat build/launcher/link.err | head -20; exit $rc
