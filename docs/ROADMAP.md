@@ -32,11 +32,11 @@ Done:
 - Alias-region streams read from the pool in place (`59be42a`): Colony 9 at the 30 option 18 -> 29 fps (capped),
   GPU 37 -> 12 ms per frame.
 - Session recording without capture freezes (`3e8e0ca`).
+- Frame lag at the 60 option (launcher / F1 "Frame lag (60 FPS)", `xc3.ini frame_lag`, default on): one frame in
+  flight instead of CPU and GPU taking turns; Colony 9 replay 52 -> 60 fps, ~10 min of live play without issues.
 
 Open:
 - Test beyond the title screen, opening and Colony 9: Everblight canyon, battles, long cutscenes, other regions.
-- Frame lag experiment (`XC3_FRAME_LAG=1`, uncommitted): 60 option ~49 -> ~60 fps in one replay; needs a live check
-  for flicker and input latency.
 - Render-thread CPU cost (~2.7 us per draw), ~800 pass splits per frame (writer draws + game barriers), ~75 hitches
   per replay (mostly loading).
 - Validate save loading and story progression; stability across areas.

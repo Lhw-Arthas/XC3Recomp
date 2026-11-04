@@ -197,6 +197,7 @@ static const char *const k_en[][2] = {
     {"Antialiasing y desenfoque de movimiento del juego (al reiniciar)", "The game's anti-aliasing and motion blur (after a restart)"},
     {"Mostrar FPS en la barra de título", "Show FPS"}, {"Velocidad", "Speed"}, {"30 (como en Switch)", "30 (like Switch)"},
     {"Sin límite", "Unlimited"}, {"FPS (al reiniciar)", "FPS (after a restart)"}, {"V-Sync (con 30 / 60 FPS)", "V-Sync (at 30 / 60 FPS)"},
+    {"Frame lag (60 FPS, al reiniciar)", "Frame lag (60 FPS, after a restart)"},
     {"Volumen", "Volume"}, {"Audio de los vídeos (al reiniciar)", "Video sound (after a restart)"}, {"Controles", "Controls"},
     {"La asignación de teclas y botones se cambia en el launcher (Play Monado.bat), pestaña Controles.",
      "Keys and buttons are remapped in the launcher, Controls tab."},
@@ -264,6 +265,7 @@ static void ui(void) {
             if (fi > 1) fi = 1;  // [XC3] 30 / 60 only (framepace.c xc3_fps_frame)
             if (ImGui::Combo(T("FPS (al reiniciar)"), &fi, TL(fpsu, 2).p, 2)) g_settings.fps = fpsv[fi];
             if (ImGui::Checkbox(T("V-Sync (con 30 / 60 FPS)"), &g_settings.vsync)) vk_request_swapchain_recreate();
+            ImGui::Checkbox(T("Frame lag (60 FPS, al reiniciar)"), &g_settings.frame_lag);  // [XC3] runtime/nvn/objects.c
             ImGui::EndTabItem();
         }
         if (ImGui::BeginTabItem(T("Audio"))) {

@@ -66,6 +66,7 @@ typedef struct {
     char rando_seed[128];  // active randomizer seed (rando/<name>/), empty = vanilla
     bool dof_off;        // [XCDE] T183: skip the game's depth of field (xcde.ini depth_of_field = 0)
     bool vsync;          // [XCDE] FIFO presentation at 30 / 60 fps (xcde.ini vsync = 0/1, default 1)
+    bool frame_lag;      // [XC3] one frame in flight at 60 fps (xc3.ini frame_lag = 0/1, default 1; runtime/nvn/objects.c)
     bool game_blur;      // [XCDE] the game's own AA / temporal AA / motion blur (lib_nx.ini; xcde.ini game_blur = 0/1)
     int upscale_quality; // [XCDE] UQ_*: FSR 3 / DLSS render size (xcde.ini upscale_quality = native|quality|balanced|performance|ultra)
     bool frame_gen;      // [XCDE] FSR 3 / DLSS frame generation (xcde.ini frame_gen = 0/1)

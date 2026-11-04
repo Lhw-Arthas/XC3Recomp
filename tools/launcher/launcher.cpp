@@ -97,6 +97,7 @@ struct Cfg {
     bool dof = true;        // the game's depth of field (T183)
     bool game_blur = true;  // the game's own AA / temporal AA / motion blur (lib_nx.ini)
     bool vsync = true;      // FIFO presentation at 30 / 60 fps
+    bool frame_lag = true;  // [XC3] one frame in flight at 60 fps (runtime/nvn/objects.c)
     int cutscenes = 0;      // T224: 0 at the FPS setting, 1 at 30 (xcde.ini cutscenes = same | 30)
     bool cut_fg = false;    // T224: cutscenes at 30 + frame generation, gameplay without it (xcde.ini cutscenes = 30fg)
     bool party_switch = false;  // party mod: switch the controlled character (F2 / L2 + L1 / R1), runtime/hle/party.c
@@ -274,6 +275,11 @@ static const char *const k_en[][2] = {
      "fluido (sin imágenes repetidas o saltadas). Con más de 60 FPS o sin límite no se aplica.",
      "Each image is shown exactly once, in sync with the display: smooth motion\n"
      "(no repeated or skipped images). Not applied above 60 FPS or unlimited."},
+    {"Frame lag (60 FPS)", "Frame lag (60 FPS)"},
+    {"Con 60 FPS, la GPU termina un frame mientras el juego prepara el siguiente: más FPS\n"
+     "(p. ej. 49 -> 60 en Colony 9); la imagen va un frame (17 ms) por detrás de los controles.",
+     "At 60 FPS the GPU finishes a frame while the game prepares the next one: more FPS\n"
+     "(e.g. 49 -> 60 in Colony 9); the image is one frame (17 ms) behind the controls."},
     {"Como el resto del juego", "Like the rest of the game"}, {"30 estables (como en Switch)", "Steady 30 (like Switch)"},
     {"Cinemáticas", "Cutscenes"},
     {"En las cinemáticas el juego anima a los personajes a 30 aunque juegues a más FPS: con la\n"
@@ -417,6 +423,7 @@ static void load() {
         else if (!strcmp(k, "depth_of_field")) g.dof = atoi(v) != 0;
         else if (!strcmp(k, "game_blur")) g.game_blur = atoi(v) != 0;
         else if (!strcmp(k, "vsync")) g.vsync = atoi(v) != 0;
+        else if (!strcmp(k, "frame_lag")) g.frame_lag = atoi(v) != 0;
         else if (!strcmp(k, "cutscenes")) { g.cutscenes = !strcmp(v, "30") || !strcmp(v, "30fg") ? 1 : 0; g.cut_fg = !strcmp(v, "30fg"); }
         else if (!strcmp(k, "party_switch")) g.party_switch = atoi(v) != 0;
         else if (!strcmp(k, "show_fps")) g.show_fps = atoi(v) != 0;
@@ -457,6 +464,7 @@ static bool save() {
     fprintf(f, "depth_of_field = %d\n", g.dof);
     fprintf(f, "game_blur = %d\n", g.game_blur);
     fprintf(f, "vsync = %d\n", g.vsync);
+    fprintf(f, "frame_lag = %d\n", g.frame_lag);
     fprintf(f, "cutscenes = %s\n", g.cut_fg ? "30fg" : g.cutscenes ? "30" : "same");
     fprintf(f, "party_switch = %d\n", g.party_switch);
     fprintf(f, "volume = %d\nmovie_audio = %d\nlanguage = %s\nfps = %s\n", g.volume, g.movie_audio, k_lang_ini[g.lang], k_fps_ini[g.fps]);
@@ -799,6 +807,11 @@ static void tab_graphics() {
     ImGui::Checkbox(T("V-Sync (con 30 / 60 FPS)"), &g.vsync);
     ImGui::SetItemTooltip(T("Cada imagen se muestra exactamente una vez, sincronizada con la pantalla: movimiento\n"
                           "fluido (sin imágenes repetidas o saltadas). Con más de 60 FPS o sin límite no se aplica."));
+#ifndef GAME_XCDE
+    ImGui::Checkbox(T("Frame lag (60 FPS)"), &g.frame_lag);  // [XC3] runtime/nvn/objects.c
+    ImGui::SetItemTooltip(T("Con 60 FPS, la GPU termina un frame mientras el juego prepara el siguiente: más FPS\n"
+                          "(p. ej. 49 -> 60 en Colony 9); la imagen va un frame (17 ms) por detrás de los controles."));
+#endif
 #ifdef GAME_XCDE
     static const char *cut_ui[] = {"Como el resto del juego", "30 estables (como en Switch)"};
     ImGui::SetNextItemWidth(320 * g_scale);

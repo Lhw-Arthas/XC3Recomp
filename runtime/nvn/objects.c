@@ -168,6 +168,30 @@ NVN(nvnSyncWait) {  // NVN_SYNC_WAIT_RESULT_ALREADY_SIGNALED
     }
     static int whole = -1;  // LARECOMP_SYNC_ALL=1: old behaviour, wait for all submitted work
     if (whole < 0) whole = getenv("LARECOMP_SYNC_ALL") ? 1 : 0;
+#ifndef GAME_XCDE
+    {   // [XC3] frame lag (launcher / F1 "Frame lag (60 FPS)": xc3.ini frame_lag, default on). The game waits at the end
+        // of every frame (lr 700124fb70, next to its frame limiter f_700124fa34) for the GPU to finish that frame: CPU and
+        // GPU took turns, ~5.6 ms of waiting per frame in Colony 9 (49 fps at the 60 option). It waits for the previous
+        // frame's GPU work instead: one frame in flight, ~60 fps there, the image one frame (16.7 ms) older than the
+        // input. Only at the 60 option (at 30 the extra 33 ms is not worth it); not with the async worker off.
+        // XC3_FRAME_LAG=0 / 1 overrides the setting.
+        static int lag = -1;
+        if (lag < 0) {
+            const char *e = getenv("XC3_FRAME_LAG");
+            lag = e ? atoi(e) != 0 : g_settings.frame_lag && g_settings.fps == 60;
+            LOG("[nvn] XC3 frame lag %s\n", lag ? "on (one frame in flight)" : "off");
+        }
+        if (lag && backend_async() && c->x[30] == 0x700124fb70ull) {
+            static uint64_t prev;
+            backend_wait_ticket(sync_of(A(0))->ticket);
+            uint64_t cur = sync_of(A(0))->seq;
+            renderer_wait_seq(prev);
+            prev = cur;
+            RET(0);
+            return;
+        }
+    }
+#endif
     if (backend_async()) { if (flush || whole) backend_drain(); else backend_wait_ticket(sync_of(A(0))->ticket); }
 #ifdef GAME_XCDE  // [XC3] keyed on the return address of XCDE's limiter
     {   // [XCDE] perf (frame lag): the game's frame limiter (f_70005bcfe0 -> f_7000603900) waits at

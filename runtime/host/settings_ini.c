@@ -11,7 +11,7 @@
 const char *const g_language_codes[N_LANGUAGES] = {"", "ja", "en-US", "fr", "de", "it", "es", "zh-CN", "ko", "nl", "pt", "ru"};
 const char *const g_language_names[N_LANGUAGES] = {"Auto", "Japanese", "English", "French", "German", "Italian", "Spanish",
                                                    "Chinese", "Korean", "Dutch", "Portuguese", "Russian"};
-Settings g_settings = {.fps = 30, .volume = 1.0f, .movie_audio = true, .res_mode = RES_MATCH, .upscaler = UPSCALE_BILINEAR, .upscale_quality = UQ_PERFORMANCE /* [XC3] the game's own render size */, .game_blur = true, .vsync = true, .ui_lang = 1};
+Settings g_settings = {.fps = 30, .volume = 1.0f, .movie_audio = true, .res_mode = RES_MATCH, .upscaler = UPSCALE_BILINEAR, .upscale_quality = UQ_PERFORMANCE /* [XC3] the game's own render size */, .game_blur = true, .vsync = true, .frame_lag = true, .ui_lang = 1};
 int g_window_w = 1280, g_window_h = 720;  // windowed size (settings.h)
 
 // [XCDE] Mods (runtime/services/romfs_virtual.c): xcde.ini `mod_<folder> = 0/1`; a folder not listed is on.
@@ -90,6 +90,7 @@ void settings_load(void) {
         else if (!strcmp(k, "depth_of_field")) g_settings.dof_off = atoi(v) == 0;
         else if (!strcmp(k, "game_blur")) g_settings.game_blur = atoi(v) != 0;
         else if (!strcmp(k, "vsync")) g_settings.vsync = atoi(v) != 0;
+        else if (!strcmp(k, "frame_lag")) g_settings.frame_lag = atoi(v) != 0;
         else if (!strcmp(k, "launcher_lang")) g_settings.ui_lang = !strcmp(v, "es") ? 0 : 1;
         else if (!strcmp(k, "stick_deadzone")) { int d = atoi(v); g_settings.stick_deadzone = d < 0 ? 0 : d > 30 ? 30 : d; }
         else if (!strcmp(k, "party_switch")) g_party_switch = atoi(v) != 0;  // [XCDE] party mod (runtime/hle/party.c)
@@ -125,6 +126,7 @@ void settings_save(void) {
     fprintf(f, "depth_of_field = %d\n", !g_settings.dof_off);
     fprintf(f, "game_blur = %d\n", g_settings.game_blur);
     fprintf(f, "vsync = %d\n", g_settings.vsync);
+    fprintf(f, "frame_lag = %d\n", g_settings.frame_lag);
     if (g_settings.stick_deadzone) fprintf(f, "stick_deadzone = %d\n", g_settings.stick_deadzone);
     fprintf(f, "launcher_lang = %s\n", g_settings.ui_lang ? "en" : "es");  // (the launcher's key: kept when the game saves)
     fprintf(f, "cutscenes = %s\n", g_settings.cutscene_mode == 1 ? "30" : g_settings.cutscene_mode == 2 ? "30fg" : "same");
