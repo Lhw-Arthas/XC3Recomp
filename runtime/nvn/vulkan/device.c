@@ -673,6 +673,68 @@ static void save_window_image(VkCommandBuffer cb, VkSpan *out) {
 }
 
 // End rendering into the window image and present it. shot_path: also save the window image as PNG.
+// [XC3] Session captures (XCDE_SHOT_EVERY: "Record the session" takes one every 150 frames) are written by a thread
+// of their own: SDL_SavePNG of a 1920x1080 image on the render thread froze the game ~360 ms each time (62 of the 107
+// hitches of a recorded session, ~22 s in 220 s). The render thread copies the pixels; the writer swaps BGR, sets the
+// alpha and saves. 2 slots: when both are busy the capture is written here as before (none is dropped). Captures a
+// test exits after (LARECOMP_EXIT_AFTER_SHOT) are written here too. vk_shot_writer_flush: the queued ones at exit.
+typedef struct { uint8_t *px; uint32_t w, h; bool bgr; char path[260]; } ShotJob;
+static ShotJob shot_jobs[2];
+static int shot_njobs;
+static pthread_mutex_t shot_lk = PTHREAD_MUTEX_INITIALIZER;
+static pthread_cond_t shot_cv = PTHREAD_COND_INITIALIZER, shot_done_cv = PTHREAD_COND_INITIALIZER;
+static bool shot_busy;
+static void shot_finish(uint8_t *px, uint32_t w, uint32_t h, bool bgr) {
+    for (uint64_t i = 0; bgr && i < (uint64_t)w * h; i++) { uint8_t t = px[i * 4]; px[i * 4] = px[i * 4 + 2]; px[i * 4 + 2] = t; }
+    for (uint64_t i = 0; i < (uint64_t)w * h; i++) px[i * 4 + 3] = 255;
+}
+static void *shot_writer(void *arg) {
+    (void)arg;
+    for (;;) {
+        pthread_mutex_lock(&shot_lk);
+        while (!shot_njobs) pthread_cond_wait(&shot_cv, &shot_lk);
+        ShotJob j = shot_jobs[0];
+        shot_busy = true;
+        pthread_mutex_unlock(&shot_lk);
+        shot_finish(j.px, j.w, j.h, j.bgr);
+        vk_save_png(j.path, j.px, j.w, j.h);
+        free(j.px);
+        pthread_mutex_lock(&shot_lk);
+        shot_jobs[0] = shot_jobs[1];
+        shot_njobs--;
+        shot_busy = false;
+        pthread_cond_broadcast(&shot_done_cv);
+        pthread_mutex_unlock(&shot_lk);
+    }
+    return NULL;
+}
+static bool shot_queue(const char *path, const uint8_t *px, uint32_t w, uint32_t h, bool bgr) {
+    static int started;
+    if (getenv("LARECOMP_EXIT_AFTER_SHOT")) return false;
+    pthread_mutex_lock(&shot_lk);
+    if (!started) {
+        pthread_t t;
+        started = pthread_create(&t, NULL, shot_writer, NULL) == 0 ? 1 : -1;
+        if (started > 0) pthread_detach(t);
+    }
+    bool ok = started > 0 && shot_njobs < 2;
+    uint8_t *copy = ok ? malloc((size_t)w * h * 4) : NULL;
+    if (copy) {
+        memcpy(copy, px, (size_t)w * h * 4);
+        ShotJob *j = &shot_jobs[shot_njobs++];
+        j->px = copy; j->w = w; j->h = h; j->bgr = bgr;
+        snprintf(j->path, sizeof j->path, "%s", path);
+        pthread_cond_signal(&shot_cv);
+    }
+    pthread_mutex_unlock(&shot_lk);
+    return copy != NULL;
+}
+void vk_shot_writer_flush(void) {
+    pthread_mutex_lock(&shot_lk);
+    while (shot_njobs) pthread_cond_wait(&shot_done_cv, &shot_lk);
+    pthread_mutex_unlock(&shot_lk);
+}
+
 void vk_frame_end(const char *shot_path) {
     if (!cur_frame.ok) return;
     VkCommandBuffer cb = vk_cmd();
@@ -701,8 +763,8 @@ void vk_frame_end(const char *shot_path) {
         uint32_t w = g_vk.sc_extent.width, h = g_vk.sc_extent.height;
         uint8_t *px = shot.ptr;
         bool bgr = g_vk.sc_format == VK_FORMAT_B8G8R8A8_UNORM || g_vk.sc_format == VK_FORMAT_B8G8R8A8_SRGB;
-        for (uint64_t i = 0; bgr && i < (uint64_t)w * h; i++) { uint8_t t = px[i * 4]; px[i * 4] = px[i * 4 + 2]; px[i * 4 + 2] = t; }
-        for (uint64_t i = 0; i < (uint64_t)w * h; i++) px[i * 4 + 3] = 255;
+        if (shot_path && !hash_it && shot_queue(shot_path, px, w, h, bgr)) return;  // (the writer thread saves it)
+        shot_finish(px, w, h, bgr);
         if (diag_hash_wanted()) diag_frame_hash(diag_frame() + 1, px, w, h);
         { extern void diag_flicker_check(uint64_t, const uint8_t *, uint32_t, uint32_t, void (*)(const char *, const uint8_t *, uint32_t, uint32_t));
           if (diag_flicker_wanted()) diag_flicker_check(diag_frame() + 1, px, w, h, vk_save_png); }
@@ -1272,6 +1334,7 @@ static void quick_exit_handler(void) {
         for (int i = 0; i < 500 && atomic_load(&pc_saving); i++) SDL_Delay(10);  // (a periodic save still writing)
         vk_pipeline_cache_save();
     }
+    vk_shot_writer_flush();  // (session captures still queued)
     if (trace) LOG("[vk] exit: terminating\n");
     fflush(stdout);
     fflush(stderr);
