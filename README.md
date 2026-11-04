@@ -168,7 +168,7 @@ When it finishes it offers to start the launcher: press **Precompile shaders** o
    ```
    XCDE_SKIP_BOOT_LINK=1 scripts/build_boot.sh   # the recompiled game -> build/obj/
    scripts/build_rt_gfx.sh                       # the runtime + Vulkan renderer -> build/xcde.exe
-   tools/launcher/build.sh                       # the launcher -> build/xcde_launcher.exe
+   tools/launcher/build.sh                       # the launcher -> build/xenoblade3_launcher.exe (XCDE: build/xcde_launcher.exe)
    ```
 5. **Optional: temporal upscalers.** FSR 3.1 and DLSS need vendor DLLs that aren't redistributed here: the AMD
    FidelityFX SDK 1.1.4 (signed prebuilt DLL) and NVIDIA Streamline 2.14.16. Download them yourself and run

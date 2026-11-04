@@ -19,7 +19,9 @@ step "4/5 Compiling the runtime and linking ${XCDE_EXE:-build/xcde.exe}"
 scripts/build_rt_gfx.sh
 exe=${XCDE_EXE:-build/xcde.exe}
 [ -f "$exe" ] || { echo "the link failed (see build/link_gfx.err)"; exit 1; }
-step "5/5 Building the launcher (build/xcde_launcher.exe)"
+launcher=build/xenoblade3_launcher.exe; play="Play XC3.bat"  # [XC3] (tools/launcher/build.sh)
+[ "$XCDE_GAME" = xcde ] && launcher=build/xcde_launcher.exe && play="Play Monado.bat"
+step "5/5 Building the launcher ($launcher)"
 tools/launcher/build.sh
 echo
-echo "Done: $exe and build/xcde_launcher.exe. Start the game with \"Play Monado.bat\" (the first time: Precompile shaders)."
+echo "Done: $exe and $launcher. Start the game with \"$play\" (the first time: Precompile shaders)."

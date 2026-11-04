@@ -81,7 +81,7 @@ static int key_from_ini(const char *v) {
 #define INI_FILE "xcde.ini"
 #define DEF_WIN 0
 #else
-#define APP_NAME "XC3Recomp"  // [XC3]
+#define APP_NAME "Xenoblade Chronicles 3"  // [XC3] (window title, ini header, the big title)
 #define INI_FILE "xc3.ini"
 #define DEF_WIN 2             // [XC3] 1920x1080: the size XC3 draws its gameplay frame at (its window crop)
 #endif
@@ -1133,7 +1133,11 @@ int main(int argc, char **argv) {
         ImGui::SetNextWindowSize(vp->WorkSize);
         ImGui::Begin("main", NULL, ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoSavedSettings);
         ImGui::SetWindowFontScale(1.5f);
+#ifdef GAME_XCDE
         ImGui::TextColored(ImVec4(0.55f, 0.85f, 1, 1), "Xenoblade Chronicles: Definitive Edition");
+#else
+        ImGui::TextColored(ImVec4(0.55f, 0.85f, 1, 1), APP_NAME);  // [XC3]
+#endif
         ImGui::SetWindowFontScale(1.0f);
         ImGui::TextDisabled("%s", T("Recompilación nativa para PC · configuración"));
         {   // [XCDE] the launcher's own language (Spanish / English), saved with the settings
