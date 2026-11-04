@@ -78,6 +78,22 @@ extern "C" void menu_apply_window_requests(void *sdl_window) {
             fs_applied = g_settings.fullscreen;
         }
     }
+    {   // [XC3] the cursor is hidden while the game window has the focus and this menu is closed (the game has no mouse
+        // pointer; F1 and Alt+Tab bring it back). The mouse camera's relative mode hides it on its own as well.
+        SDL_Window *w = (SDL_Window *)sdl_window;
+        SDL_WindowFlags f = SDL_GetWindowFlags(w);
+        static int hidden = -1;
+        int want = (f & SDL_WINDOW_INPUT_FOCUS) && !open_;
+        if (want != hidden) { hidden = want; if (want) SDL_HideCursor(); else SDL_ShowCursor(); }
+        static int logged;  // (the window as it came out: fullscreen or not, its size)
+        if (!logged && (f & SDL_WINDOW_INPUT_FOCUS)) {
+            logged = 1;
+            int ww = 0, wh = 0;
+            SDL_GetWindowSizeInPixels(w, &ww, &wh);
+            fprintf(stderr, "[window] %s %dx%d (setting fullscreen = %d)\n", (f & SDL_WINDOW_FULLSCREEN) ? "fullscreen" : "windowed", ww, wh,
+                    (int)g_settings.fullscreen);
+        }
+    }
     if (g_settings.show_fps && want_title && cur_fps > 0) {
         want_title = false;
         char title[128];
