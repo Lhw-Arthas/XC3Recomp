@@ -215,7 +215,7 @@ static const char *const k_en[][2] = {
     {"Sin límite", "Unlimited"}, {"FPS (al reiniciar)", "FPS (after a restart)"}, {"V-Sync (con 30 / 60 FPS)", "V-Sync (at 30 / 60 FPS)"},
     {"Frame lag (60 FPS, al reiniciar)", "Frame lag (60 FPS, after a restart)"},
     {"Volumen", "Volume"}, {"Audio de los vídeos (al reiniciar)", "Video sound (after a restart)"}, {"Controles", "Controls"},
-    {"La asignación de teclas y botones se cambia en el launcher (Play Monado.bat), pestaña Controles.",
+    {"La asignación de teclas y botones se cambia en el launcher (Play XC3.bat), pestaña Controles.",
      "Keys and buttons are remapped in the launcher, Controls tab."},
     {"Guardar", "Save"}, {"Volver al juego", "Back to the game"}, {"Guardado en " INI_FILE, "Saved to " INI_FILE},
 };
@@ -293,7 +293,7 @@ static void ui(void) {
             ImGui::EndTabItem();
         }
         if (ImGui::BeginTabItem(T("Controles"))) {
-            ImGui::TextWrapped(T("La asignación de teclas y botones se cambia en el launcher (Play Monado.bat), pestaña Controles."));
+            ImGui::TextWrapped(T("La asignación de teclas y botones se cambia en el launcher (Play XC3.bat), pestaña Controles."));
             ImGui::EndTabItem();
         }
         ImGui::EndTabBar();

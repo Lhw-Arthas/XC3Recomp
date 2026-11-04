@@ -1,6 +1,6 @@
 // Monado launcher: edits xcde.ini (graphics, scaling, controls, audio, language) and starts the game.
 // Standalone (SDL3 + Dear ImGui with the SDL renderer); the game reads the same file when its window opens
-// (runtime/host/settings_ini.c). Build: tools/launcher/build.sh. Run: "Play Monado.bat" at the repository root.
+// (runtime/host/settings_ini.c). Build: tools/launcher/build.sh. Run: "Play XC3.bat" at the repository root (XCDE: "Play Monado.bat").
 #include <SDL3/SDL.h>
 #include <SDL3/SDL_main.h>
 #include <stdarg.h>

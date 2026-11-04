@@ -1,13 +1,13 @@
 @echo off
-rem Monado: set up the tools (tools\setup_windows.ps1), point the project at your own game files
+rem XC3Recomp: set up the tools (tools\setup_windows.ps1), point the project at your own game files
 rem (tools\setup_game_files.ps1) and build everything (scripts\build_all.sh). Instructions on how to obtain the game
-rem files are NOT provided: you need the exefs and romfs folders of your own copy, version 2.0.0.
+rem files are NOT provided: you need the exefs and romfs folders of your own copy, version 2.2.0 (the base game with the 2.2.0 update applied).
 setlocal EnableExtensions
 cd /d "%~dp0"
-title Monado - build
+title Xenoblade Chronicles 3 - build
 echo.
-echo  Monado build
-echo  ============
+echo  Xenoblade Chronicles 3 build
+echo  ============================
 
 rem ---- Git Bash runs the build scripts
 set "BASH=%ProgramFiles%\Git\bin\bash.exe"
@@ -38,13 +38,13 @@ set "PATH=C:\msys64\ucrt64\bin;%PATH%"
 rem ---- 2. your game files
 ".venv\Scripts\python.exe" -X utf8 tools\extract\check_dump.py targets >nul 2>nul
 if errorlevel 1 goto :pick
-echo  2. Game files: targets\ already holds version 2.0.0
+echo  2. Game files: targets\ already holds version 2.2.0
 choice /m "    Use them"
 if not errorlevel 2 goto :build
 :pick
 echo.
 echo  2. Choose the folder that has the game's exefs and romfs folders in it.
-echo     ^(Xenoblade Chronicles: Definitive Edition, version 2.0.0: the base game with the 2.0.0 update applied^)
+echo     ^(Xenoblade Chronicles 3, version 2.2.0: the base game with the 2.2.0 update applied^)
 powershell -NoProfile -ExecutionPolicy Bypass -File tools\setup_game_files.ps1
 if errorlevel 2 goto :fail
 if errorlevel 1 (
@@ -67,7 +67,7 @@ if errorlevel 1 (
 echo.
 echo  Optional: FSR 3.1 and DLSS need vendor DLLs that are not included ^(README, "Building", step 5^).
 choice /m " Start the launcher now"
-if not errorlevel 2 start "" "build\xcde_launcher.exe"
+if not errorlevel 2 start "" "build\xenoblade3_launcher.exe"
 endlocal
 exit /b 0
 

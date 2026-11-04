@@ -1,7 +1,7 @@
 # Point the project at the player's own game files (modelled on LASRecomp's start-screen game-file setup).
 # The player picks a folder; exefs (the folder with main and main.npdm) and romfs (the folder with bdat/, the game's
 # data root) are found in it or a few levels below (some layouts nest them). Game packages (.xci / .nsp / .nca / .nsz)
-# are refused without being read. The version (2.0.0) and the romfs contents are checked by tools/extract/check_dump.py,
+# are refused without being read. The version (games/<id>/profile.json: XC3 2.2.0) and the romfs contents are checked by tools/extract/check_dump.py,
 # then targets\exefs and targets\romfs are linked to the folders found (junctions: no 14 GB copy).
 #   powershell -ExecutionPolicy Bypass -File tools\setup_game_files.ps1 [folder]      exit 0 = ready
 param([string]$Folder)
@@ -24,7 +24,7 @@ function Find-Game([string]$dir, [int]$depth, [hashtable]$found) {
 if (-not $Folder) {
     Add-Type -AssemblyName System.Windows.Forms
     $dlg = New-Object System.Windows.Forms.FolderBrowserDialog
-    $dlg.Description = "$PickHint (Xenoblade Chronicles: Definitive Edition, version 2.0.0)"
+    $dlg.Description = "$PickHint (Xenoblade Chronicles 3, version 2.2.0)"
     if ($dlg.ShowDialog() -ne 'OK') { Write-Host 'Cancelled.'; exit 2 }
     $Folder = $dlg.SelectedPath
 }
@@ -35,7 +35,7 @@ Find-Game (Resolve-Path -LiteralPath $Folder).Path 0 $found
 if (-not $found.exefs -or -not $found.romfs) {
     if ($found.packages) {
         Write-Host 'Those are game packages, not game files.'
-        Write-Host 'Monado needs the game''s own files (the exefs and romfs folders), not .xci / .nsp / .nca files.'
+        Write-Host 'XC3Recomp needs the game''s own files (the exefs and romfs folders), not .xci / .nsp / .nca files.'
     } else {
         Write-Host 'No game files found in that folder.'
         Write-Host $PickHint
@@ -49,8 +49,8 @@ Write-Host "romfs: $($found.romfs)"
 $py = "$root\.venv\Scripts\python.exe"
 & $py -X utf8 "$root\tools\extract\check_dump.py" --exefs $found.exefs --romfs $found.romfs
 if ($LASTEXITCODE -ne 0) {
-    if ($LASTEXITCODE -eq 4) { Write-Host 'Monado needs version 2.0.0: the base game with the 2.0.0 update applied.' }
-    elseif ($LASTEXITCODE -eq 5) { Write-Host 'Some romfs files are missing or different, usually from a copy or extraction that stopped partway, or a romfs without the 2.0.0 update. Get the game files again, then choose the folder again.' }
+    if ($LASTEXITCODE -eq 4) { Write-Host 'XC3Recomp needs version 2.2.0: the base game with the 2.2.0 update applied.' }
+    elseif ($LASTEXITCODE -eq 5) { Write-Host 'Some romfs files are missing or different, usually from a copy or extraction that stopped partway, or a romfs without the 2.2.0 update. Get the game files again, then choose the folder again.' }
     exit 1
 }
 

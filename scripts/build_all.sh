@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
 # Everything from a checked dump in targets/ to a playable build: recompile the game code (generated/), compile it
-# and the runtime (build/xcde.exe), build the launcher. "Build Monado.bat" runs it; it also works on its own:
+# and the runtime (build/xcde.exe), build the launcher. "Build XC3.bat" runs it; it also works on its own:
 #   scripts/build_all.sh            (XCDE_EXE=build/other.exe: link the game under another name, e.g. for tests)
 # Needs: MSYS2 UCRT64 at C:\msys64 with the libraries, and .venv with capstone unicorn lz4 ziglang (see README).
 set -e
 cd "$(dirname "$0")/.."
 step() { echo; echo "=== $* ==="; }
-[ -x .venv/Scripts/python ] || [ -f .venv/Scripts/python.exe ] || { echo "missing .venv (run \"Build Monado.bat\" or see the README)"; exit 1; }
+[ -x .venv/Scripts/python ] || [ -f .venv/Scripts/python.exe ] || { echo "missing .venv (run \"Build XC3.bat\" or see the README)"; exit 1; }
 step "1/5 Checking the game files (targets/)"
 export XCDE_GAME=${XCDE_GAME:-xc3}
 echo "game: games/$XCDE_GAME"
