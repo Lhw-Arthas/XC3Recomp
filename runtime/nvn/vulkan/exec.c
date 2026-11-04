@@ -5523,7 +5523,18 @@ static void draw_(CmdRec *r, bool indexed) {
     }
     { uint32_t m = (uint32_t)r->x[0]; g_draw_gs_in = m == 0 ? 1 : (m <= 3 || m == 0xa || m == 0xb) ? 2 : 3; }  // [XCDE] NVN draw mode -> GS input
     Prog *pr = get_program(st.program, &vkey, &fkey);
-    bool pr_ok = pr && wait_ready(&pr->state, pr, 0);
+    uint64_t pr_max = 0;
+#ifndef GAME_XCDE
+    // [XC3] the shadow pass's programs (a geometry stage: see the pipeline wait below) are not waited for either: a
+    // model whose shadow program is still being built casts no shadow for those frames. A live session waited 45
+    // times for them (1.0 s; new variants compiled at first use, 30-106 ms each). XC3_GS_WAIT_MS=0: wait, as before.
+    if ((st.program->stage_mask & 4) && st.program->stages[2].code_addr) {
+        static int64_t gs_wait_ms = -1;
+        if (gs_wait_ms < 0) gs_wait_ms = getenv("XC3_GS_WAIT_MS") ? atoll(getenv("XC3_GS_WAIT_MS")) : 50;
+        if (gs_wait_ms > 0) pr_max = 1;
+    }
+#endif
+    bool pr_ok = pr && wait_ready(&pr->state, pr, pr_max);
     if (pr && g_last_wait_ns > build_wait_min()) build_wait_log(pr, NULL, g_last_wait_ns);
     if (!pr_ok) {
         static int nlog_;

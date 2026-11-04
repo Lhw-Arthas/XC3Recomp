@@ -34,7 +34,9 @@ Done:
 - Session recording without capture freezes (`3e8e0ca`).
 - Shader stutter at first use: the SPIR-V cache (`cache/spirv.pack`) is read through a handle per build thread, not
   one shared handle (Windows ran those reads one at a time): program builds over 3 ms 1095 -> 84 per Colony 9 replay,
-  pack reads 5.7 -> 0.2 s. Still open: pipeline libraries built by AMD's driver at first use (~8 ms each).
+  pack reads 5.7 -> 0.2 s. Shadow-pass programs are not waited for either (a model's shadow comes a few frames late).
+  Still open: pipeline libraries built by AMD's driver at first use (8-70 ms); loading-frame holds (frames of 0-45
+  draws held for the build work: 62 holds / 5.5 s in a 6.5 min session - loading screens, maybe menus: to confirm).
 - Frame lag at the 60 option (launcher / F1 "Frame lag (60 FPS)", `xc3.ini frame_lag`, default on): one frame in
   flight instead of CPU and GPU taking turns; Colony 9 replay 52 -> 60 fps, ~10 min of live play without issues.
 
