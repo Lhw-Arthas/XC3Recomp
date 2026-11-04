@@ -52,6 +52,9 @@ Status: **planned, early work done** (lower priority than phases 1 and 2).
 
 Done:
 - `tools/launcher`: graphics, upscaler, FPS, controls, button prompts, language, session recording, reports.
+- Launcher named "Xenoblade Chronicles 3" (`build/xenoblade3_launcher.exe`, `bf9de01`), dark theme, our own icon,
+  optional background `mods/launcher/background.png` (`c15a3c7`).
+- In game: cursor hidden while the window has the focus (`658faa1`); SMAA skipped while FSR / DLSS runs (`f0ad94e`).
 - `scripts/build_all.sh`: dump check, recompilation, build; shader precompilation.
 
 Open:
