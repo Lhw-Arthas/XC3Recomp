@@ -149,6 +149,35 @@ static void file_lock(int fd, bool on) {
 #endif
 }
 
+// [XC3] A shader's record (16-byte header + SPIR-V) in one read, through a read handle of the calling thread's own.
+// All the build threads read through pack_fd before: Windows runs the synchronous reads of one file object one at a
+// time, so a burst of new shaders (a new area, effect or UI) queued behind each other - 87% of a program's build,
+// 24-33 ms for 100-250 KB from an NVMe drive (~10 MB/s), and the draws waiting for them stuttered.
+static ssize_t pack_read(void *buf, size_t n, int64_t off) {
+#ifdef _WIN32
+    static __thread HANDLE h;
+    static __thread int tried;
+    if (!tried) {
+        tried = 1;
+        h = CreateFileA("cache/spirv.pack", GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, NULL, OPEN_EXISTING,
+                        FILE_ATTRIBUTE_NORMAL | FILE_FLAG_RANDOM_ACCESS, NULL);
+    }
+    if (h && h != INVALID_HANDLE_VALUE) {
+        size_t done = 0;
+        while (done < n) {
+            OVERLAPPED ov = {0};
+            uint64_t o = (uint64_t)off + done;
+            ov.Offset = (DWORD)o, ov.OffsetHigh = (DWORD)(o >> 32);
+            DWORD chunk = n - done > 0x40000000 ? 0x40000000 : (DWORD)(n - done), got = 0;
+            if (!ReadFile(h, (char *)buf + done, chunk, &got, &ov) || !got) break;
+            done += got;
+        }
+        return (ssize_t)done;
+    }
+#endif
+    return pread64_(pack_fd, buf, n, off);  // (no handle of its own: the shared one)
+}
+
 static uint32_t *pack_get(uint64_t h, size_t *nwords) {
     pthread_mutex_lock(&pack_lock);
     if (!pack_open()) { pthread_mutex_unlock(&pack_lock); return NULL; }
@@ -157,16 +186,17 @@ static uint32_t *pack_get(uint64_t h, size_t *nwords) {
     PackEntry c = e ? *e : (PackEntry){0};
     pthread_mutex_unlock(&pack_lock);
     if (!c.hash || c.bytes < 20 || c.bytes % 4 || c.off < 16) return NULL;
-    uint32_t hdr[4];
-    uint32_t *d = malloc(c.bytes);
-    if (pread64_(pack_fd, hdr, 16, (int64_t)c.off - 16) != 16 || hdr[0] != 0x56505358u || hdr[1] != c.bytes ||
-        ((uint64_t)hdr[3] << 32 | hdr[2]) != h || pread64_(pack_fd, d, c.bytes, (int64_t)c.off) != (ssize_t)c.bytes ||
-        d[0] != 0x07230203) {
-        free(d);
+    uint32_t *rec = malloc(16 + (size_t)c.bytes);
+    if (!rec) return NULL;
+    const uint32_t *hdr = rec, *spv = rec + 4;
+    if (pack_read(rec, 16 + (size_t)c.bytes, (int64_t)c.off - 16) != (ssize_t)(16 + c.bytes) || hdr[0] != 0x56505358u ||
+        hdr[1] != c.bytes || ((uint64_t)hdr[3] << 32 | hdr[2]) != h || spv[0] != 0x07230203) {
+        free(rec);
         return NULL;
     }
+    memmove(rec, spv, c.bytes);  // (the callers free what they get: the SPIR-V at the start of the block)
     *nwords = c.bytes / 4;
-    return d;
+    return rec;
 }
 
 static bool pack_has(uint64_t h) {

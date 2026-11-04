@@ -32,6 +32,9 @@ Done:
 - Alias-region streams read from the pool in place (`59be42a`): Colony 9 at the 30 option 18 -> 29 fps (capped),
   GPU 37 -> 12 ms per frame.
 - Session recording without capture freezes (`3e8e0ca`).
+- Shader stutter at first use: the SPIR-V cache (`cache/spirv.pack`) is read through a handle per build thread, not
+  one shared handle (Windows ran those reads one at a time): program builds over 3 ms 1095 -> 84 per Colony 9 replay,
+  pack reads 5.7 -> 0.2 s. Still open: pipeline libraries built by AMD's driver at first use (~8 ms each).
 - Frame lag at the 60 option (launcher / F1 "Frame lag (60 FPS)", `xc3.ini frame_lag`, default on): one frame in
   flight instead of CPU and GPU taking turns; Colony 9 replay 52 -> 60 fps, ~10 min of live play without issues.
 
