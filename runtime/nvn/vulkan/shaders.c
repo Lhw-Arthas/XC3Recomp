@@ -188,7 +188,23 @@ static ssize_t pack_read(void *buf, size_t n, int64_t off) {
     return pread64_(pack_fd, buf, n, off);  // (no handle of its own: the shared one)
 }
 
+// [XC3] an index entry whose record does not hold that shader (bytes 0: "not in the pack" for pack_put / pack_has).
+// The index outlived its pack once (spirv.pack emptied, spirv.idx kept: 143,213 stale entries): each of those shaders
+// failed to load, was compiled again and never stored (pack_put saw the hash) - the same stutters every session.
+static void pack_mark_bad(uint64_t h) {
+    static int n;
+    pthread_mutex_lock(&pack_lock);
+    PackEntry *e = (PackEntry *)pack_find(h);
+    if (e && e->bytes) { e->bytes = 0; if (n++ < 5) LOG("[shader] spirv pack: entry %016llx does not match its record: stored again\n", (unsigned long long)h); }
+    pthread_mutex_unlock(&pack_lock);
+}
+static uint32_t *pack_get_(uint64_t h, size_t *nwords);
 static uint32_t *pack_get(uint64_t h, size_t *nwords) {
+    uint32_t *r = pack_get_(h, nwords);
+    if (!r) pack_mark_bad(h);  // (no entry: nothing to mark)
+    return r;
+}
+static uint32_t *pack_get_(uint64_t h, size_t *nwords) {
     pthread_mutex_lock(&pack_lock);
     if (!pack_open()) { pthread_mutex_unlock(&pack_lock); return NULL; }
     const PackEntry *e = pack_find(h);
@@ -234,7 +250,9 @@ static uint32_t *pack_get(uint64_t h, size_t *nwords) {
 
 static bool pack_has(uint64_t h) {
     pthread_mutex_lock(&pack_lock);
-    bool ok = pack_open() && (pack_find(h) || (pack_refresh(), pack_find(h)));
+    const PackEntry *e = pack_open() ? pack_find(h) : NULL;
+    if (pack_state > 0 && !e) { pack_refresh(); e = pack_find(h); }
+    bool ok = e && e->bytes;
     pthread_mutex_unlock(&pack_lock);
     return ok;
 }
@@ -244,7 +262,8 @@ static bool pack_put(uint64_t h, const uint32_t *spv, size_t nwords) {
     if (!pack_open()) { pthread_mutex_unlock(&pack_lock); return false; }
     file_lock(idx_fd, true);
     pack_refresh();  // (another process may have stored it meanwhile)
-    bool ok = pack_find(h) != NULL;
+    const PackEntry *pe = pack_find(h);
+    bool ok = pe && pe->bytes;  // (bytes 0: a bad entry, pack_mark_bad - stored again, the later entry wins)
     int64_t psz = fd_size(pack_fd), isz = fd_size(idx_fd);
     if (!ok && psz >= 0 && isz >= 0) {
         size_t raw_bytes = nwords * 4;
