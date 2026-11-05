@@ -12,6 +12,17 @@
 
 #define FRAME_PERIOD_NS 33333333ull  // the game runs at 30 fps
 
+static const char *get_env_compat(const char *name) {
+    if (!strncmp(name, "XCDE_", 5)) {
+        char buf[64];
+        snprintf(buf, sizeof buf, "XC3_%s", name + 5);
+        const char *v = getenv(buf);
+        if (v && *v) return v;
+    }
+    return getenv(name);
+}
+#define getenv(x) get_env_compat(x)
+
 static int env_flag(const char *name) {
     const char *v = getenv(name);
     return v && *v && strcmp(v, "0");

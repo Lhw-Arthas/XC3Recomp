@@ -16,12 +16,15 @@ saves=1; [ "$2" = "--no-saves" ] && saves=0
 U=/c/msys64/ucrt64/bin
 export PATH="$U:$PATH"
 launcher=build/xenoblade3_launcher.exe; play="Play XC3.bat"  # [XC3] (tools/launcher/build.sh)
-[ "${XCDE_GAME:-xc3}" = xcde ] && launcher=build/xcde_launcher.exe && play="Play Monado.bat"
+TARGET_GAME="${XC3_GAME:-${XCDE_GAME:-xc3}}"
+[ "$TARGET_GAME" = xcde ] && launcher=build/xcde_launcher.exe && play="Play Monado.bat"
+exe=build/xc3.exe
+[ -f "$exe" ] || exe=build/xcde.exe
 mkdir -p "$out/build" "$out/cache" "$out/data"
-cp -p build/xcde.exe "$launcher" "$out/build/"
+cp -p "$exe" "$launcher" "$out/build/"
 for d in build/*.dll; do cp -p "$d" "$out/build/"; done  # (DLSS / FSR / Reflex)
 # the msys64 DLLs both programs load (ldd resolves them through PATH)
-for e in build/xcde.exe "$launcher"; do ldd "$e"; done | awk '{print $3}' | grep -i "^$U/" | sort -u |
+for e in "$exe" "$launcher"; do ldd "$e"; done | awk '{print $3}' | grep -i "^$U/" | sort -u |
     while read -r d; do cp -p "$d" "$out/build/"; done
 w() { cygpath -w "$1"; }
 rc() { MSYS_NO_PATHCONV=1 MSYS2_ARG_CONV_EXCL="*" robocopy "$(w "$1")" "$(w "$2")" /E /NFL /NDL /NJH /NJS /NP /R:1 /W:1 > /dev/null || [ $? -lt 8 ]; }  # (robocopy: <8 = ok)

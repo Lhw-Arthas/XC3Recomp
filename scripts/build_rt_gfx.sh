@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# XCDE_EXE=build/other.exe builds/links a separate exe without killing running games.
-# Compile every runtime object build/xcde.exe links (build/rt/*.o, build/nvn/*.o), then link it (scripts/link_gfx.sh).
+# XC3_EXE=build/other.exe builds/links a separate exe without killing running games.
+# Compile every runtime object build/xc3.exe links (build/rt/*.o, build/nvn/*.o), then link it (scripts/link_gfx.sh).
 #   scripts/build_rt_gfx.sh            # all objects
 #   scripts/build_rt_gfx.sh kernel hle/movie nvn/vulkan/exec   # only these (paths under runtime/, no .c)
 # The game objects (build/obj) come from scripts/build_boot.sh. The window build of main_boot gets -DXCDE_GFX.
@@ -12,13 +12,14 @@ Z=".venv/Scripts/python -m ziglang cc"
 MSYS_CXX="-idirafter /c/msys64/ucrt64/include"
 CF="-O1 -march=x86_64_v2 -fno-strict-aliasing -fvisibility=hidden -Iruntime -Iruntime/nvn -Ithird_party $MSYS_CXX -w"
 # [XC3] runtime code tied to XCDE addresses / romfs content is built only for that game (tools/game.py)
-if [ "${XCDE_GAME:-xc3}" = xcde ]; then CF="$CF -DGAME_XCDE"; fi
+TARGET_GAME="${XC3_GAME:-${XCDE_GAME:-xc3}}"
+if [ "$TARGET_GAME" = xcde ]; then CF="$CF -DGAME_XCDE"; fi
 # [XC3] 64-bit off_t / stat (as runtime/platform/win_compat.h asks): with mingw's 32-bit ones stat() fails on files over
 # 2 GB and the virtual romfs left out XC3's 9.7 GB bf3.ard. (XCDE: unchanged; none of its files is that large.)
-if [ "${XCDE_GAME:-xc3}" != xcde ]; then CF="$CF -D_FILE_OFFSET_BITS=64"; fi
+if [ "$TARGET_GAME" != xcde ]; then CF="$CF -D_FILE_OFFSET_BITS=64"; fi
 # [XC3] the language served to the game when the player picked none: the profile's default_language (XC3: en-GB)
 lang=$(.venv/Scripts/python -c "import json,sys; print(json.load(open(sys.argv[1])).get('default_language', ''))" \
-       "games/${XCDE_GAME:-xc3}/profile.json" 2>/dev/null | tr -d '\r')
+       "games/$TARGET_GAME/profile.json" 2>/dev/null | tr -d '\r')
 if [[ "$lang" =~ ^[A-Za-z-]+$ ]]; then CF="$CF -DGAME_DEFAULT_LANGUAGE=\"$lang\""; fi
 RT="loader dispatch kernel ipc fnprof platform/windows services/fs services/romfs_virtual services/am services/acc services/time
     services/hid_set services/kbicons services/misc services/audio services/hwopus hle/heaps hle/pl hle/vi hle/nvn_boot hle/fibers hle/input hle/party

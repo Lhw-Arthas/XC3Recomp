@@ -33,7 +33,7 @@ static void *pl_pending[PL_MAX];  // [XCDE] T211: programs whose shader librarie
 static int pl_npending;
 static int lv_npending;  // [XCDE] T212: variant library jobs waiting for their program (lv_pending, below)
 // [XCDE] T136: paused transform feedback captures, by control buffer address (where NVN keeps the write position)
-static struct { uint64_t ctrl, written; } xfb_ctrl[16];
+static struct { uint64_t ctrl, written, count; } xfb_ctrl[16];
 static int n_xfb_ctrl;
 static unsigned xfb_ctrl_rr;
 static int xfb_ctrl_find(uint64_t ctrl) { for (int i = 0; i < n_xfb_ctrl; i++) if (xfb_ctrl[i].ctrl == ctrl) return i; return -1; }
@@ -1094,6 +1094,7 @@ static struct {
     Range xfb_buf[4];      // [XCDE] T134: transform feedback buffers, capture active, bytes captured into buffer 0
     bool xfb_on, raster_discard;
     uint64_t xfb_written;
+    uint64_t xfb_count;
 } st;
 static uint32_t g_xfbp[8];  // [XCDE] T134: the current draw's XfbP uniform (shader.h XFB_PARAM_INDEX; set in draw_)
 
@@ -5914,6 +5915,7 @@ static void draw_(CmdRec *r, bool indexed) {
             if (at < end) { xfb_at = at; xfb_bytes = bytes; }
         }
         st.xfb_written += bytes;
+        st.xfb_count += (uint64_t)xcount * xinst;
         if (g_debug_frame) LOG("[xfb] vs %llx -> %llx (+%llu bytes, %u x %u, stride %u)\n", (unsigned long long)st.program->stages[0].code_addr,
                                (unsigned long long)at, (unsigned long long)bytes, xcount, xinst, vkey.xfb_stride);
     }
@@ -7070,7 +7072,7 @@ static void exec_list(uint64_t handle, int depth) {
             if (until && renderer_present_count() < until) {
                 switch (r->op) {
                 case CMD_CLEAR_COLOR: case CMD_CLEAR_TEXTURE: case CMD_CLEAR_DEPTH_STENCIL: case CMD_DISPATCH:
-                case CMD_DRAW_ARRAYS: case CMD_DRAW_ELEMENTS: case CMD_COPY_TEXTURE_TO_TEXTURE: case CMD_DOWNSAMPLE:
+                case CMD_DRAW_ARRAYS: case CMD_DRAW_ELEMENTS: case CMD_DRAW_TRANSFORM_FEEDBACK: case CMD_COPY_TEXTURE_TO_TEXTURE: case CMD_DOWNSAMPLE:
                 case CMD_COPY_BUFFER_TO_TEXTURE: case CMD_COPY_TEXTURE_TO_BUFFER:
                     p += r->size;
                     continue;
@@ -7175,13 +7177,16 @@ static void exec_list(uint64_t handle, int depth) {
         // (the old code) resumed a paused capture where the *last* capture stopped.
         case CMD_BEGIN_XFB:
             st.xfb_on = true;
-            if (!r->x[1]) st.xfb_written = 0;
+            if (!r->x[1]) { st.xfb_written = 0; st.xfb_count = 0; }
             else {
                 int k = xfb_ctrl_find(r->x[0]);
-                if (k >= 0) st.xfb_written = xfb_ctrl[k].written;
+                if (k >= 0) {
+                    st.xfb_written = xfb_ctrl[k].written;
+                    st.xfb_count = xfb_ctrl[k].count;
+                }
             }
-            if (g_debug_frame) LOG("[xfb] %s ctrl %llx -> offset %llu (buffer %llx)\n", r->x[1] ? "resume" : "begin", (unsigned long long)r->x[0],
-                                   (unsigned long long)st.xfb_written, (unsigned long long)st.xfb_buf[0].addr);
+            if (g_debug_frame) LOG("[xfb] %s ctrl %llx -> offset %llu count %llu (buffer %llx)\n", r->x[1] ? "resume" : "begin", (unsigned long long)r->x[0],
+                                   (unsigned long long)st.xfb_written, (unsigned long long)st.xfb_count, (unsigned long long)st.xfb_buf[0].addr);
             break;
         case CMD_END_XFB:
             st.xfb_on = false;
@@ -7189,8 +7194,10 @@ static void exec_list(uint64_t handle, int depth) {
                 int k = xfb_ctrl_find(r->x[0]);
                 if (k < 0) { k = n_xfb_ctrl < 16 ? n_xfb_ctrl++ : (int)(xfb_ctrl_rr++ & 15); xfb_ctrl[k].ctrl = r->x[0]; }
                 xfb_ctrl[k].written = st.xfb_written;
+                xfb_ctrl[k].count = st.xfb_count;
             }
-            if (g_debug_frame) LOG("[xfb] %s ctrl %llx at offset %llu\n", r->x[1] ? "pause" : "end", (unsigned long long)r->x[0], (unsigned long long)st.xfb_written);
+            if (g_debug_frame) LOG("[xfb] %s ctrl %llx at offset %llu count %llu\n", r->x[1] ? "pause" : "end", (unsigned long long)r->x[0],
+                                   (unsigned long long)st.xfb_written, (unsigned long long)st.xfb_count);
             break;
         case CMD_SET_RASTERIZER_DISCARD: st.raster_discard = (r->x[0] & 1) != 0; break;
         case CMD_RESET_COUNTER:  // [XCDE] T139 (counter type): a samples-passed count starts from zero here
@@ -7289,6 +7296,29 @@ static void exec_list(uint64_t handle, int depth) {
         case CMD_DISPATCH: dispatch_compute((uint32_t)r->x[0], (uint32_t)r->x[1], (uint32_t)r->x[2]); break;
         case CMD_DRAW_ARRAYS: draw(r, false); split_submit(); break;
         case CMD_DRAW_ELEMENTS: draw(r, true); split_submit(); break;
+        case CMD_DRAW_TRANSFORM_FEEDBACK: {
+            // [XC3] DrawTransformFeedback(mode, xfbBufferIndex):
+            // In NVN, draws primitives using the count of vertices captured into the transform feedback buffer.
+            uint32_t mode = (uint32_t)r->x[0];
+            uint32_t vcount = (uint32_t)st.xfb_count;
+            if (!vcount && st.xfb_written) {
+                uint32_t stride = st.nstream > 0 && st.stream[0][0] ? st.stream[0][0] : 24;
+                vcount = (uint32_t)(st.xfb_written / stride);
+            }
+            if (g_debug_frame) LOG("[xfb] DrawTransformFeedback mode %u vcount %u (written %llu)\n", mode, vcount, (unsigned long long)st.xfb_written);
+            if (vcount > 0) {
+                CmdRec syn = *r;
+                syn.op = CMD_DRAW_ARRAYS;
+                syn.x[0] = mode;
+                syn.x[1] = 0;      // first
+                syn.x[2] = vcount; // count
+                syn.x[3] = 0;      // base_inst
+                syn.x[4] = 1;      // inst
+                draw(&syn, false);
+                split_submit();
+            }
+            break;
+        }
         case CMD_UPDATE_UNIFORM_BUFFER:
             watch_mem_note("inline uniform update", r->x[0] + r->x[2], r->x[3]);
             memcpy((void *)(uintptr_t)(r->x[0] + r->x[2]), x, r->x[3]);
@@ -7300,6 +7330,13 @@ static void exec_list(uint64_t handle, int depth) {
             if (fence_flush) renderer_flush();
             extern void nvn_sync_set_seq(uint64_t guest, uint64_t seq);
             if (r->x[FENCE_SYNC_ARG]) nvn_sync_set_seq(r->x[FENCE_SYNC_ARG], renderer_fence_seq());
+            break;
+        }
+        case CMD_WAIT_SYNC: {
+            // [XC3] nvnCommandBufferWaitSync (command 50): GPU queue synchronization.
+            // Vulkan submissions are ordered sequentially; if inside an active render pass,
+            // end it to guarantee pipeline barrier ordering and memory visibility.
+            if (in_pass) { vk_end_pass(); st.rt_dirty = true; }
             break;
         }
         case CMD_REPORT_COUNTER: {

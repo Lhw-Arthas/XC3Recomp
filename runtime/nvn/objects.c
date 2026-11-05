@@ -178,7 +178,7 @@ NVN(nvnSyncWait) {  // NVN_SYNC_WAIT_RESULT_ALREADY_SIGNALED
         static int lag = -1;
         if (lag < 0) {
             const char *e = getenv("XC3_FRAME_LAG");
-            lag = e ? atoi(e) != 0 : g_settings.frame_lag && g_settings.fps == 60;
+            lag = e ? atoi(e) != 0 : (g_settings.fps == 60 || g_settings.frame_lag);
             LOG("[nvn] XC3 frame lag %s\n", lag ? "on (one frame in flight)" : "off");
         }
         if (lag && backend_async() && c->x[30] == 0x700124fb70ull) {

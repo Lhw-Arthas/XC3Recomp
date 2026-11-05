@@ -31,7 +31,8 @@ bool settings_mod_enabled(const char *name) {
 static char g_button_icons[16] = "auto";  // [XCDE] the launcher's choice (button_icons), kept when the game saves
 
 static const char *ini_path(void) {
-    const char *e = getenv("XCDE_INI");
+    const char *e = getenv("XC3_INI");
+    if (!e) e = getenv("XCDE_INI");
     if (e) return e;
 #ifdef GAME_XCDE
     return "xcde.ini";
@@ -54,8 +55,10 @@ static int lang_index(const char *v) {
 }
 
 void settings_load(void) {
-    // test runs (hidden window, deterministic, scripted input) ignore the player's settings unless XCDE_INI names a file
-    if (!getenv("XCDE_INI") && (getenv("LARECOMP_HIDDEN") || getenv("XCDE_DETERMINISTIC") || getenv("XCDE_INPUT_REPLAY"))) return;
+    // test runs (hidden window, deterministic, scripted input) ignore the player's settings unless XC3_INI/XCDE_INI names a file
+    if (!getenv("XC3_INI") && !getenv("XCDE_INI") &&
+        (getenv("LARECOMP_HIDDEN") || getenv("XC3_DETERMINISTIC") || getenv("XCDE_DETERMINISTIC") ||
+         getenv("XC3_INPUT_REPLAY") || getenv("XCDE_INPUT_REPLAY"))) return;
     FILE *f = fopen(ini_path(), "r");
     if (!f) return;
     char line[512];
@@ -89,9 +92,30 @@ void settings_load(void) {
         else if (!strcmp(k, "antialias")) g_settings.antialias = !strcmp(v, "smaa") ? AA_SMAA : AA_OFF;
         else if (!strcmp(k, "depth_of_field")) g_settings.dof_off = atoi(v) == 0;
         else if (!strcmp(k, "game_blur")) g_settings.game_blur = atoi(v) != 0;
-        else if (!strcmp(k, "vsync")) g_settings.vsync = atoi(v) != 0;
+        else if (!strcmp(k, "vsync")) {
+            if (!strcmp(v, "immediate") || !strcmp(v, "vrr") || !strcmp(v, "off") || !strcmp(v, "0")) {
+                g_settings.vsync = false;
+                g_settings.present_mode = 2;
+            } else if (!strcmp(v, "mailbox") || !strcmp(v, "fast")) {
+                g_settings.vsync = true;
+                g_settings.present_mode = 1;
+            } else {
+                g_settings.vsync = true;
+                g_settings.present_mode = 0;
+            }
+        } else if (!strcmp(k, "present_mode")) {
+            if (!strcmp(v, "immediate") || !strcmp(v, "vrr")) g_settings.present_mode = 2;
+            else if (!strcmp(v, "mailbox") || !strcmp(v, "fast")) g_settings.present_mode = 1;
+            else g_settings.present_mode = 0;
+        } else if (!strcmp(k, "anisotropy")) {
+            int a = atoi(v);
+            g_settings.anisotropy = a >= 16 ? 16 : a >= 8 ? 8 : a >= 4 ? 4 : a >= 2 ? 2 : 0;
+        } else if (!strcmp(k, "astc_decoder")) {
+            if (!strcmp(v, "cpu") || !strcmp(v, "software") || !strcmp(v, "1")) g_settings.astc_mode = 1;
+            else g_settings.astc_mode = 0;
+        }
         else if (!strcmp(k, "frame_lag")) g_settings.frame_lag = atoi(v) != 0;
-        else if (!strcmp(k, "launcher_lang")) g_settings.ui_lang = !strcmp(v, "es") ? 0 : 1;
+        else if (!strcmp(k, "launcher_lang")) g_settings.ui_lang = 1;
         else if (!strcmp(k, "stick_deadzone")) { int d = atoi(v); g_settings.stick_deadzone = d < 0 ? 0 : d > 30 ? 30 : d; }
         else if (!strcmp(k, "party_switch")) g_party_switch = atoi(v) != 0;  // [XCDE] party mod (runtime/hle/party.c)
         else if (!strcmp(k, "volume")) g_settings.volume = (float)atof(v) / 100.0f;
@@ -104,6 +128,9 @@ void settings_load(void) {
         else bind_settings_load(k, v);
     }
     fclose(f);
+#ifndef GAME_XCDE
+    g_settings.frame_lag = (g_settings.fps == 60);
+#endif
     if (g_window_w < 320) g_window_w = 320;
     if (g_window_h < 180) g_window_h = 180;
     if (g_settings.volume < 0) g_settings.volume = 0;
@@ -113,8 +140,11 @@ void settings_load(void) {
 void settings_save(void) {
     FILE *f = fopen(ini_path(), "w");
     if (!f) return;
+#ifndef GAME_XCDE
+    g_settings.frame_lag = (g_settings.fps == 60);
+#endif
     static const char *res[] = {"match", "1", "2", "3", "4", "5", "6", "7", "8", "dynamic", "75%", "25%", "50%"};
-    fprintf(f, "# Monado settings (the launcher writes this file)\n");
+    fprintf(f, "# XC3Recomp settings (the launcher writes this file)\n");
     fprintf(f, "fullscreen = %d\nwindow = %dx%d\n", g_settings.fullscreen, g_window_w, g_window_h);
     fprintf(f, "resolution = %s\n", g_settings.res_mode >= 0 && g_settings.res_mode <= 12 ? res[g_settings.res_mode] : "match");
     static const char *up[] = {"bilinear", "bilinear", "fsr", "fsr3", "dlss", "fsr4"};
@@ -125,10 +155,14 @@ void settings_save(void) {
             uq[g_settings.upscale_quality >= 0 && g_settings.upscale_quality <= 4 ? g_settings.upscale_quality : 1], g_settings.frame_gen);
     fprintf(f, "depth_of_field = %d\n", !g_settings.dof_off);
     fprintf(f, "game_blur = %d\n", g_settings.game_blur);
-    fprintf(f, "vsync = %d\n", g_settings.vsync);
+    if (g_settings.anisotropy) fprintf(f, "anisotropy = %d\n", g_settings.anisotropy);
+    if (g_settings.astc_mode) fprintf(f, "astc_decoder = cpu\n");
+    if (g_settings.present_mode == 2) fprintf(f, "vsync = immediate\n");
+    else if (g_settings.present_mode == 1) fprintf(f, "vsync = mailbox\n");
+    else fprintf(f, "vsync = %d\n", g_settings.vsync);
     fprintf(f, "frame_lag = %d\n", g_settings.frame_lag);
     if (g_settings.stick_deadzone) fprintf(f, "stick_deadzone = %d\n", g_settings.stick_deadzone);
-    fprintf(f, "launcher_lang = %s\n", g_settings.ui_lang ? "en" : "es");  // (the launcher's key: kept when the game saves)
+    fprintf(f, "launcher_lang = en\n");
     fprintf(f, "cutscenes = %s\n", g_settings.cutscene_mode == 1 ? "30" : g_settings.cutscene_mode == 2 ? "30fg" : "same");
     fprintf(f, "party_switch = %d\n", g_party_switch);
     fprintf(f, "volume = %d\nmovie_audio = %d\nshow_fps = %d\n", (int)(g_settings.volume * 100 + 0.5f), g_settings.movie_audio,

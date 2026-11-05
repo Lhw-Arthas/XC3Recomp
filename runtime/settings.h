@@ -66,11 +66,14 @@ typedef struct {
     char rando_seed[128];  // active randomizer seed (rando/<name>/), empty = vanilla
     bool dof_off;        // [XCDE] T183: skip the game's depth of field (xcde.ini depth_of_field = 0)
     bool vsync;          // [XCDE] FIFO presentation at 30 / 60 fps (xcde.ini vsync = 0/1, default 1)
+    int present_mode;    // [XC3] 0 = FIFO (V-Sync), 1 = Mailbox (Fast Sync), 2 = Immediate (V-Sync OFF / VRR)
+    int anisotropy;      // [XC3] 0 = Default, 2..16 = Force Anisotropic Filtering (default: 16)
+    int astc_mode;       // [XC3] 0 = Auto / GPU Compute (NVIDIA/AMD), 1 = CPU Software Fallback
     bool frame_lag;      // [XC3] one frame in flight at 60 fps (xc3.ini frame_lag = 0/1, default 1; runtime/nvn/objects.c)
     bool game_blur;      // [XCDE] the game's own AA / temporal AA / motion blur (lib_nx.ini; xcde.ini game_blur = 0/1)
     int upscale_quality; // [XCDE] UQ_*: FSR 3 / DLSS render size (xcde.ini upscale_quality = native|quality|balanced|performance|ultra)
     bool frame_gen;      // [XCDE] FSR 3 / DLSS frame generation (xcde.ini frame_gen = 0/1)
-    int ui_lang;         // [XCDE] launcher and F1-menu language: 0 Spanish, 1 English (xcde.ini launcher_lang = es | en)
+    int ui_lang;         // [XC3] launcher and F1-menu language: permanently 1 (English)
     int stick_deadzone;  // [XCDE] % of the stick's travel read as centred (xcde.ini stick_deadzone = 0-30, default 0: raw)
     int cutscene_mode;   // [XCDE] T224: 0 cutscenes at the FPS setting, 1 at 30, 2 at 30 + FSR 3 frame generation (xcde.ini cutscenes = same|30|30fg)
 } Settings;

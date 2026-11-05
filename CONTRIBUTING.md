@@ -1,4 +1,4 @@
-# Contributing to Monado
+# Contributing to XC3Recomp
 
 ## Project rules (the "constitution")
 

@@ -16,6 +16,7 @@ void vk_watch(VkImage dst, const char *site);  // [XCDE] debugging: log writes t
 #include "../astc.h"
 #include "../renderer.h"
 #include "../texpatch.h"
+#include "../../settings.h"
 #include "../../env_cache.h"  // (last: cached getenv)
 
 // ================================================================== formats
@@ -419,7 +420,7 @@ static void create_image(NvnTexture *t, TexBackend *b) {
     VkFormat vf = mf.vf;
     VkFormatFeatureFlags need = VK_FORMAT_FEATURE_SAMPLED_IMAGE_BIT | VK_FORMAT_FEATURE_TRANSFER_DST_BIT;
     b->astc_bw = b->astc_bh = 0;
-    if (!format_supports(vf, need)) {
+    if (!format_supports(vf, need) || getenv("XC3_ASTC_CPU")) {
         bool astc = vf >= VK_FORMAT_ASTC_4x4_UNORM_BLOCK && vf <= VK_FORMAT_ASTC_12x12_SRGB_BLOCK;
         const FormatInfo *fi = t->layout.fmt;
         if (astc && fi && fi->bpb == 16) {  // desktop GPUs: decoded on the CPU into an RGBA8 image of the same colour space
@@ -837,6 +838,124 @@ static bool dz_level(VkCommandBuffer cb, const uint8_t *src, const LevelLayout *
     return true;
 }
 
+#include "astc_cs.inc"
+
+static VkPipeline astc_pipe;
+static VkPipelineLayout astc_layout;
+static VkDescriptorSetLayout astc_dsl;
+static VkDescriptorPool astc_pool;
+static struct { VkBuffer buf; VkDescriptorSet set; } astc_sets[32];
+static int astc_state;  // 0 untried, 1 ready, -1 off
+
+static bool astc_cs_ready(void) {
+    if (astc_state) return astc_state > 0;
+    astc_state = -1;
+    const char *e = getenv("XC3_ASTC_CPU");
+    if (e && atoi(e)) return false;
+    if (g_settings.astc_mode == 1) return false;
+    size_t nw = 0;
+    uint32_t *spv = vk_glsl_to_spirv(astc_glsl, 5 /* compute */, "astc_decoder", &nw);
+    if (!spv) return false;
+    VkShaderModuleCreateInfo mi = {.sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO, .codeSize = nw * 4, .pCode = spv};
+    VkShaderModule mod;
+    VkResult r = vkCreateShaderModule(g_vk.dev, &mi, NULL, &mod);
+    free(spv);
+    if (r != VK_SUCCESS) return false;
+    VkDescriptorSetLayoutBinding bd = {0, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, NULL};
+    VkDescriptorSetLayoutCreateInfo li = {.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO, .bindingCount = 1, .pBindings = &bd};
+    VkPushConstantRange pc = {VK_SHADER_STAGE_COMPUTE_BIT, 0, 48};
+    VkDescriptorPoolSize ps = {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 32};
+    VkDescriptorPoolCreateInfo pi = {.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO, .maxSets = 32, .poolSizeCount = 1, .pPoolSizes = &ps};
+    if (vkCreateDescriptorSetLayout(g_vk.dev, &li, NULL, &astc_dsl) != VK_SUCCESS ||
+        vkCreateDescriptorPool(g_vk.dev, &pi, NULL, &astc_pool) != VK_SUCCESS) { vkDestroyShaderModule(g_vk.dev, mod, NULL); return false; }
+    VkPipelineLayoutCreateInfo pli = {.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO, .setLayoutCount = 1, .pSetLayouts = &astc_dsl,
+                                      .pushConstantRangeCount = 1, .pPushConstantRanges = &pc};
+    if (vkCreatePipelineLayout(g_vk.dev, &pli, NULL, &astc_layout) != VK_SUCCESS) { vkDestroyShaderModule(g_vk.dev, mod, NULL); return false; }
+    VkComputePipelineCreateInfo ci = {.sType = VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO, .layout = astc_layout,
+                                      .stage = {.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO,
+                                                .stage = VK_SHADER_STAGE_COMPUTE_BIT, .module = mod, .pName = "main"}};
+    r = vkCreateComputePipelines(g_vk.dev, g_vk.pcache, 1, &ci, NULL, &astc_pipe);
+    vkDestroyShaderModule(g_vk.dev, mod, NULL);
+    if (r != VK_SUCCESS) return false;
+    astc_state = 1;
+    LOG("[vk] GPU ASTC compute decoder on\n");
+    return true;
+}
+
+static VkDescriptorSet astc_cs_set(VkBuffer buf) {
+    for (int i = 0; i < 32; i++) {
+        if (astc_sets[i].buf == buf) return astc_sets[i].set;
+        if (astc_sets[i].buf) continue;
+        VkDescriptorSetAllocateInfo ai = {.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO, .descriptorPool = astc_pool,
+                                          .descriptorSetCount = 1, .pSetLayouts = &astc_dsl};
+        VkDescriptorSet set;
+        if (vkAllocateDescriptorSets(g_vk.dev, &ai, &set) != VK_SUCCESS) return VK_NULL_HANDLE;
+        VkDescriptorBufferInfo bi = {buf, 0, VK_WHOLE_SIZE};
+        VkWriteDescriptorSet w = {.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, .dstSet = set, .descriptorCount = 1,
+                                  .descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, .pBufferInfo = &bi};
+        vkUpdateDescriptorSets(g_vk.dev, 1, &w, 0, NULL);
+        astc_sets[i].buf = buf;
+        astc_sets[i].set = set;
+        return set;
+    }
+    return VK_NULL_HANDLE;
+}
+
+static bool astc_decode_level_gpu(VkCommandBuffer cb, const uint8_t *blocks, uint32_t w, uint32_t h,
+                                  uint32_t wb, uint32_t hb, uint32_t bw, uint32_t bh, bool srgb, VkSpan *out_rgba) {
+    if (!astc_cs_ready()) return false;
+    uint64_t blocks_bytes = (uint64_t)wb * hb * 16;
+    uint64_t blocks_al = (blocks_bytes + 255) & ~255ull;
+    uint64_t rgba_bytes = (uint64_t)w * h * 4;
+    if (blocks_al + rgba_bytes > (1ull << 31)) return false;
+
+    VkSpan s = vk_transient(blocks_al + rgba_bytes, 256);
+    VkDescriptorSet set = astc_cs_set(s.buf);
+    if (!set) return false;
+
+    memcpy(s.ptr, blocks, blocks_bytes);
+
+    struct {
+        uint32_t src;
+        uint32_t dst;
+        uint32_t width;
+        uint32_t height;
+        uint32_t bw;
+        uint32_t bh;
+        uint32_t srgb;
+        uint32_t num_blocks_x;
+        uint32_t total_blocks;
+    } pc = {
+        .src = (uint32_t)(s.off / 4),
+        .dst = (uint32_t)((s.off + blocks_al) / 4),
+        .width = w,
+        .height = h,
+        .bw = bw,
+        .bh = bh,
+        .srgb = srgb ? 1 : 0,
+        .num_blocks_x = wb,
+        .total_blocks = wb * hb,
+    };
+
+    vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_COMPUTE, astc_pipe);
+    vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_COMPUTE, astc_layout, 0, 1, &set, 0, NULL);
+    vkCmdPushConstants(cb, astc_layout, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof pc, &pc);
+    vkCmdDispatch(cb, (wb * hb + 63) / 64, 1, 1);
+
+    VkMemoryBarrier2 mb = {.sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER_2,
+                           .srcStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                           .srcAccessMask = VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT,
+                           .dstStageMask = VK_PIPELINE_STAGE_2_COPY_BIT,
+                           .dstAccessMask = VK_ACCESS_2_TRANSFER_READ_BIT};
+    VkDependencyInfo di = {.sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO, .memoryBarrierCount = 1, .pMemoryBarriers = &mb};
+    vkCmdPipelineBarrier2(cb, &di);
+
+    out_rgba->buf = s.buf;
+    out_rgba->off = s.off + blocks_al;
+    out_rgba->ptr = (uint8_t *)s.ptr + blocks_al;
+    return true;
+}
+
 static uint64_t up_tp_ns, up_wc_ns, up_hash_ns, up_cmd_ns, up_tr_ns, up_cp_ns;  // (XCDE_PROF_UPLOAD) parts of the last check
 // [XCDE] perf: XCDE_PROF_UPLOAD=1 logs every texture check that takes over 2 ms (what made scene changes hitch)
 static void upload_texture(NvnTexture *t, TexBackend *b) {
@@ -945,8 +1064,13 @@ static void upload_texture_(NvnTexture *t, TexBackend *b) {
                 if (linear) for (uint32_t y = 0; y < l.hb; y++) memcpy(blocks + (uint64_t)y * l.wb * 16, src + (uint64_t)y * t->stride, l.wb * 16);
                 else tegra_deswizzle(src, blocks, l.wb, l.hb, 1, 16, l.block_height_log2, l.block_depth_log2);
                 if (b->tp > 0 && layer == 0) texpatch_apply(b->tp - 1, lv, blocks, l.w, l.h, l.wb * 16);
-                VkSpan s = vk_transient((uint64_t)l.w * l.h * 4, 16);
-                astc_decode_ldr(blocks, l.w, l.h, b->astc_bw, b->astc_bh, b->astc_srgb, s.ptr);
+                VkSpan s;
+                bool gpu_ok = !getenv("XC3_ASTC_CPU") && (g_settings.astc_mode == 0) &&
+                              astc_decode_level_gpu(cb, blocks, l.w, l.h, l.wb, l.hb, b->astc_bw, b->astc_bh, b->astc_srgb, &s);
+                if (!gpu_ok) {
+                    s = vk_transient((uint64_t)l.w * l.h * 4, 16);
+                    astc_decode_ldr(blocks, l.w, l.h, b->astc_bw, b->astc_bh, b->astc_srgb, s.ptr);
+                }
                 free(blocks);
                 VkBufferImageCopy rg = {.bufferOffset = s.off, .bufferRowLength = l.w, .bufferImageHeight = l.h,
                                         .imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, lv, layer, 1},
@@ -1369,6 +1493,16 @@ VkSampler vk_sampler(NvnSamplerDesc *d) {
     if (si.maxLod < si.minLod) si.maxLod = si.minLod;
     si.mipLodBias = d->lod_bias;
     if (d->max_aniso > 1) { si.anisotropyEnable = VK_TRUE; si.maxAnisotropy = fminf(d->max_aniso, 16); }
+    int force_aniso = g_settings.anisotropy;
+    if (!force_aniso && getenv("XC3_ANISO")) force_aniso = atoi(getenv("XC3_ANISO"));
+    if (!force_aniso && getenv("LARECOMP_ANISO")) force_aniso = atoi(getenv("LARECOMP_ANISO"));
+    if (force_aniso > 1 && mf > 1 && d->lod_max > 0 && !d->compare_mode) {
+        float max_a = fminf((float)force_aniso, g_vk.props.limits.maxSamplerAnisotropy > 0 ? g_vk.props.limits.maxSamplerAnisotropy : 16.0f);
+        if (max_a > 1.0f) {
+            si.anisotropyEnable = VK_TRUE;
+            if (si.maxAnisotropy < max_a) si.maxAnisotropy = max_a;
+        }
+    }
     static float lodmin = -1;
     if (lodmin < 0) lodmin = getenv("LARECOMP_LOD_MIN") ? (float)atof(getenv("LARECOMP_LOD_MIN")) : 0;
     if (lodmin > 0 && mf > 1) si.minLod = fmaxf(si.minLod, lodmin);

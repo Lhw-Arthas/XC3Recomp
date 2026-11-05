@@ -1,4 +1,4 @@
-// Monado launcher: edits xcde.ini (graphics, scaling, controls, audio, language) and starts the game.
+// XC3 launcher: edits xc3.ini (graphics, scaling, controls, audio, language) and starts the game.
 // Standalone (SDL3 + Dear ImGui with the SDL renderer); the game reads the same file when its window opens
 // (runtime/host/settings_ini.c). Build: tools/launcher/build.sh. Run: "Play XC3.bat" at the repository root (XCDE: "Play Monado.bat").
 #include <SDL3/SDL.h>
@@ -79,10 +79,12 @@ static int key_from_ini(const char *v) {
 #ifdef GAME_XCDE
 #define APP_NAME "Monado"
 #define INI_FILE "xcde.ini"
+#define GAME_EXE "build/xcde.exe"
 #define DEF_WIN 0
 #else
 #define APP_NAME "Xenoblade Chronicles 3"  // [XC3] (window title, ini header, the big title)
 #define INI_FILE "xc3.ini"
+#define GAME_EXE "build/xc3.exe"
 #define DEF_WIN 2             // [XC3] 1920x1080: the size XC3 draws its gameplay frame at (its window crop)
 #endif
 
@@ -97,6 +99,9 @@ struct Cfg {
     bool dof = true;        // the game's depth of field (T183)
     bool game_blur = true;  // the game's own AA / temporal AA / motion blur (lib_nx.ini)
     bool vsync = true;      // FIFO presentation at 30 / 60 fps
+    int present_mode = 0;   // [XC3] 0 = FIFO, 1 = Mailbox, 2 = Immediate (VRR)
+    int anisotropy = 16;    // [XC3] 0 = Default, 2..16 Forced Anisotropic Filtering (default: 16)
+    int astc_mode = 0;     // [XC3] 0 = GPU Compute Shader (Fast), 1 = CPU Software Fallback
     bool frame_lag = true;  // [XC3] one frame in flight at 60 fps (runtime/nvn/objects.c)
     int cutscenes = 0;      // T224: 0 at the FPS setting, 1 at 30 (xcde.ini cutscenes = same | 30)
     bool cut_fg = false;    // T224: cutscenes at 30 + frame generation, gameplay without it (xcde.ini cutscenes = 30fg)
@@ -112,7 +117,7 @@ struct Cfg {
     int mouse_sens = 50;
     int stick_deadzone = 0;     // % of the stick's travel read as centred (0: raw)
     bool mouse_invert = false;
-    int ui_lang = 1;            // the launcher's own language: 0 Spanish, 1 English (xcde.ini launcher_lang)
+    int ui_lang = 1;            // the launcher's own language: permanently 1 (English)
     int icons = 0;              // button prompts: 0 auto (the connected controller, else the keyboard), 1 Switch, 2 Xbox, 3 PlayStation, 4 keyboard
     bool record = false;        // [XC3] record the session (as scripts/play.sh): not saved, off at every start
 };
@@ -139,18 +144,18 @@ static const char *const k_uq_ini[] = {"native", "quality", "balanced", "perform
 static const char *const k_wins[] = {"1280x720", "1600x900", "1920x1080", "2560x1440", "3840x2160"};
 static const char *const k_res_ini[] = {"match", "1", "2", "3", "75%", "50%", "dynamic"};
 #ifdef GAME_XCDE
-static const char *const k_res_ui[] = {"Igual que la ventana (recomendado)", "1x - 720p (como Switch)", "2x - 1440p",
-                                       "3x - 2160p (4K)", "75% de la ventana", "50% de la ventana", "Dinámica (según rendimiento)"};
-#define RES_HINT "El juego original renderiza a 720p. Más resolución = imagen más nítida y más carga para la GPU."
+static const char *const k_res_ui[] = {"Match window (recommended)", "1x - 720p (like Switch)", "2x - 1440p",
+                                       "3x - 2160p (4K)", "75% of window", "50% of window", "Dynamic (based on performance)"};
+#define RES_HINT "The original game renders at 720p. Higher resolution = sharper image and higher GPU load."
 #else
 // [XC3] N x the frame the game draws: 1920x1080 in gameplay (Switch docked), 1280x720 on the title screen and in movies
-static const char *const k_res_ui[] = {"Igual que la ventana (recomendado)", "1x - 1080p (como Switch en TV)", "2x - 2160p (4K)",
-                                       "3x - 3240p", "75% de la ventana", "50% de la ventana", "Dinámica (según rendimiento)"};
-#define RES_HINT "XC3 renderiza el juego a 1080p (Switch en TV). Más resolución = imagen más nítida y más carga para la GPU."
+static const char *const k_res_ui[] = {"Match window (recommended)", "1x - 1080p (like Switch on TV)", "2x - 2160p (4K)",
+                                       "3x - 3240p", "75% of window", "50% of window", "Dynamic (based on performance)"};
+#define RES_HINT "XC3 renders the game at 1080p (Switch docked). Higher resolution = sharper image and higher GPU load."
 #endif
 static const char *const k_fps_ini[] = {"30", "60", "120", "144", "165", "unlimited"};
 static const char *const k_lang_ini[] = {"auto", "en-US", "es", "fr", "de", "it", "ja"};
-static const char *const k_lang_ui[] = {"Inglés (por defecto)", "Inglés", "Español", "Francés", "Alemán", "Italiano", "Japonés"};
+static const char *const k_lang_ui[] = {"English (default)", "English", "Spanish", "French", "German", "Italian", "Japanese"};
 
 static Cfg g;
 
@@ -271,6 +276,22 @@ static const char *const k_en[][2] = {
      "Above 30: world speed, the clock and scenes don't change (tested at 60 and 120);\n"
      "the camera sits a bit farther. V-Sync forced in the NVIDIA / AMD panel or a RivaTuner\n"
      "limit also cap the FPS: leave them on 'application setting' / 0."},
+    {"Filtrado anisotrópico (AF)", "Anisotropic filtering (AF)"},
+    {"16x (Recomendado)", "16x (Recommended)"},
+    {"Mejora notablemente la nitidez de texturas en superficies oblicuas o a distancia (suelos, rocas, caminos)\n"
+     "sin costo apreciable en GPUs modernas.",
+     "Noticeably improves texture clarity on angled surfaces or in the distance (terrain, rocks, roads)\n"
+     "with negligible cost on modern GPUs."},
+    {"Sincronización vertical (V-Sync / VRR)", "Vertical sync (V-Sync / VRR)"},
+    {"V-Sync ON (FIFO)", "V-Sync ON (FIFO)"},
+    {"Fast Sync (Mailbox)", "Fast Sync (Mailbox)"},
+    {"V-Sync OFF / VRR (Immediate)", "V-Sync OFF / VRR (Immediate)"},
+    {"FIFO: V-Sync clásico sin tearing, sincronizado al refresco de la pantalla.\n"
+     "Mailbox: Fast Sync / latencia mínima sin tearing.\n"
+     "Immediate: V-Sync OFF, recomendado para monitores con G-Sync / FreeSync (VRR).",
+     "FIFO: Classic tear-free V-Sync, locked to display refresh rate.\n"
+     "Mailbox: Fast Sync / minimal latency without screen tearing.\n"
+     "Immediate: V-Sync OFF, recommended for G-Sync / FreeSync (VRR) monitors."},
     {"V-Sync (con 30 / 60 FPS)", "V-Sync (at 30 / 60 FPS)"},
     {"Cada imagen se muestra exactamente una vez, sincronizada con la pantalla: movimiento\n"
      "fluido (sin imágenes repetidas o saltadas). Con más de 60 FPS o sin límite no se aplica.",
@@ -345,7 +366,7 @@ static const char *const k_en[][2] = {
     {"Recompilación nativa para PC · configuración", "Native PC recompilation · settings"},
     {"Gráficos", "Graphics"}, {"Controles", "Controls"}, {"Audio e idioma", "Audio and language"},
     {"Faltan los archivos del juego en targets/ (exefs y romfs de tu copia).", "The game files are missing in targets/ (exefs and romfs of your copy)."},
-    {"Falta build/xcde.exe (compila el juego primero).", "build/xcde.exe is missing (build the game first)."},
+    {"Falta build/xc3.exe (compila el juego primero).", "build/xc3.exe is missing (build the game first)."},
     {"Listo. Guardado: save/   Ajustes: " INI_FILE, "Ready. Saves: save/   Settings: " INI_FILE},
     {"Listo. La primera vez, JUGAR prepara los shaders antes (unos minutos)", "Ready. The first time, PLAY prepares the shaders first (a few minutes)"},
     {"Omitir", "Skip"}, {"Detener", "Stop"},
@@ -361,7 +382,7 @@ static const char *const k_en[][2] = {
      "cierre inesperado (sin partidas guardadas ni archivos del juego), para adjuntarlo a un reporte.",
      "Puts in a .zip the logs of the last two sessions, " INI_FILE " and the latest crash report\n"
      "(no saves or game files), to attach to a bug report."},
-    {"Salir", "Quit"}, {"No se pudo iniciar build/xcde.exe (error ", "Could not start build/xcde.exe (error "},
+    {"Salir", "Quit"}, {"No se pudo iniciar build/xc3.exe (error ", "Could not start build/xc3.exe (error "},
     {"Juego iniciado. Registro: build/last_game.log", "Game started. Log: build/last_game.log"},
     {"No se pudo iniciar la precompilación (error ", "Could not start the precompilation (error "},
     {"Buscando shaders en los archivos del juego...", "Looking for shaders in the game files..."},
@@ -402,7 +423,6 @@ static const char *const k_en[][2] = {
     {"La compilación falló (registro: build/build_all.log)", "The build failed (log: build/build_all.log)"},
 };
 static const char *T(const char *es) {
-    if (g.ui_lang != 1) return es;
     for (const auto &e : k_en) if (!strcmp(e[0], es)) return e[1];
     return es;
 }
@@ -447,7 +467,27 @@ static void load() {
         else if (!strcmp(k, "antialias")) g.smaa = !strcmp(v, "smaa");
         else if (!strcmp(k, "depth_of_field")) g.dof = atoi(v) != 0;
         else if (!strcmp(k, "game_blur")) g.game_blur = atoi(v) != 0;
-        else if (!strcmp(k, "vsync")) g.vsync = atoi(v) != 0;
+        else if (!strcmp(k, "vsync")) {
+            if (!strcmp(v, "immediate") || !strcmp(v, "vrr") || !strcmp(v, "off") || !strcmp(v, "0")) {
+                g.vsync = false;
+                g.present_mode = 2;
+            } else if (!strcmp(v, "mailbox") || !strcmp(v, "fast")) {
+                g.vsync = true;
+                g.present_mode = 1;
+            } else {
+                g.vsync = true;
+                g.present_mode = 0;
+            }
+        } else if (!strcmp(k, "present_mode")) {
+            if (!strcmp(v, "immediate") || !strcmp(v, "vrr")) g.present_mode = 2;
+            else if (!strcmp(v, "mailbox") || !strcmp(v, "fast")) g.present_mode = 1;
+            else g.present_mode = 0;
+        } else if (!strcmp(k, "anisotropy")) {
+            int a = atoi(v);
+            g.anisotropy = a >= 16 ? 16 : a >= 8 ? 8 : a >= 4 ? 4 : a >= 2 ? 2 : 0;
+        } else if (!strcmp(k, "astc_decoder")) {
+            g.astc_mode = (!strcmp(v, "cpu") || !strcmp(v, "software") || !strcmp(v, "1")) ? 1 : 0;
+        }
         else if (!strcmp(k, "frame_lag")) g.frame_lag = atoi(v) != 0;
         else if (!strcmp(k, "cutscenes")) { g.cutscenes = !strcmp(v, "30") || !strcmp(v, "30fg") ? 1 : 0; g.cut_fg = !strcmp(v, "30fg"); }
         else if (!strcmp(k, "party_switch")) g.party_switch = atoi(v) != 0;
@@ -468,11 +508,14 @@ static void load() {
         else if (!strcmp(k, "mouse_look")) g.mouse_look = std::clamp(atoi(v), 0, 2);
         else if (!strcmp(k, "mouse_sens")) g.mouse_sens = std::clamp(atoi(v), 1, 100);
         else if (!strcmp(k, "stick_deadzone")) g.stick_deadzone = std::clamp(atoi(v), 0, 30);
-        else if (!strcmp(k, "launcher_lang")) g.ui_lang = !strcmp(v, "es") ? 0 : 1;
+        else if (!strcmp(k, "launcher_lang")) g.ui_lang = 1;
         else if (!strcmp(k, "mouse_invert")) g.mouse_invert = atoi(v) != 0;
         else if (!strcmp(k, "button_icons") && (i = find(k_icon_ini, 5, v)) >= 0) g.icons = i;
     }
     fclose(f);
+#ifndef GAME_XCDE
+    g.frame_lag = (g.fps == 1);  // [XC3] 60 fps automatically enables frame lag
+#endif
     if (layout < 2) for (int i = 0; i < NACT; i++) g.key[i] = k_def_key[i], g.key2[i] = k_def_key2[i];
 }
 
@@ -484,11 +527,16 @@ static bool save() {
             k_wins[g.win], k_res_ini[g.res], k_ups_ini[g.upscaler], g.smaa ? "smaa" : "off", g.show_fps);
 #ifndef GAME_XCDE
     g.frame_gen = g.cut_fg = false;  // [XC3] not offered (see the upscaler options)
+    g.frame_lag = (g.fps == 1);      // [XC3] 60 fps automatically enables frame lag
 #endif
     fprintf(f, "upscale_quality = %s\nframe_gen = %d\n", k_uq_ini[g.uquality], g.frame_gen);
     fprintf(f, "depth_of_field = %d\n", g.dof);
     fprintf(f, "game_blur = %d\n", g.game_blur);
-    fprintf(f, "vsync = %d\n", g.vsync);
+    if (g.anisotropy) fprintf(f, "anisotropy = %d\n", g.anisotropy);
+    if (g.astc_mode) fprintf(f, "astc_decoder = cpu\n");
+    if (g.present_mode == 2) fprintf(f, "vsync = immediate\n");
+    else if (g.present_mode == 1) fprintf(f, "vsync = mailbox\n");
+    else fprintf(f, "vsync = %d\n", g.vsync);
     fprintf(f, "frame_lag = %d\n", g.frame_lag);
     fprintf(f, "cutscenes = %s\n", g.cut_fg ? "30fg" : g.cutscenes ? "30" : "same");
     fprintf(f, "party_switch = %d\n", g.party_switch);
@@ -505,7 +553,7 @@ static bool save() {
     }
     fprintf(f, "mouse_look = %d\nmouse_sens = %d\nmouse_invert = %d\n", g.mouse_look, g.mouse_sens, g.mouse_invert);
     fprintf(f, "stick_deadzone = %d\n", g.stick_deadzone);
-    fprintf(f, "launcher_lang = %s\n", g.ui_lang ? "en" : "es");
+    fprintf(f, "launcher_lang = en\n");
     fclose(f);
     return true;
 }
@@ -513,6 +561,17 @@ static bool save() {
 static bool exists(const char *rel) {
     SDL_PathInfo pi;
     return SDL_GetPathInfo(path(rel).c_str(), &pi);
+}
+
+static std::string get_game_exe_path() {
+    if (exists(GAME_EXE)) return path(GAME_EXE);
+    if (exists("build/xc3.exe")) return path("build/xc3.exe");
+    if (exists("build/xcde.exe")) return path("build/xcde.exe");
+    return path(GAME_EXE);
+}
+
+static bool have_game_exe() {
+    return exists(GAME_EXE) || exists("build/xc3.exe") || exists("build/xcde.exe");
 }
 
 static std::string g_status;
@@ -626,7 +685,7 @@ static bool play_button(const char *label, ImVec2 size) {
 static void launch() {
     if (!save()) { g_status = T("No se pudo escribir " INI_FILE); return; }
 #ifdef _WIN32
-    std::string exe = path("build/xcde.exe");
+    std::string exe = get_game_exe_path();
     std::string cmd = "\"" + exe + "\" targets";
     // the game's DLLs (SDL3, Vulkan loader, FFmpeg, opus) come from MSYS2
     const char *old = getenv("PATH");
@@ -646,6 +705,9 @@ static void launch() {
         CreateDirectoryA(path("play").c_str(), NULL);
         CreateDirectoryA(path(rec_dir.c_str()).c_str(), NULL);
         log = path((rec_dir + "/game.log").c_str());
+        SetEnvironmentVariableA("XC3_SHOT_EVERY", ("150:" + rec_dir).c_str());
+        SetEnvironmentVariableA("XC3_INPUT_RECORD", (rec_dir + "/input.txt").c_str());
+        SetEnvironmentVariableA("XC3_STALL", "5");
         SetEnvironmentVariableA("XCDE_SHOT_EVERY", ("150:" + rec_dir).c_str());
         SetEnvironmentVariableA("XCDE_INPUT_RECORD", (rec_dir + "/input.txt").c_str());
         SetEnvironmentVariableA("XCDE_STALL", "5");
@@ -662,7 +724,7 @@ static void launch() {
     buf.push_back(0);
     BOOL ok = CreateProcessA(exe.c_str(), buf.data(), NULL, NULL, TRUE, CREATE_NO_WINDOW, NULL, g_root.c_str(), &si, &pi);
     if (h != INVALID_HANDLE_VALUE) CloseHandle(h);
-    if (!ok) { g_status = std::string(T("No se pudo iniciar build/xcde.exe (error ")) + std::to_string(GetLastError()) + ")"; return; }
+    if (!ok) { g_status = std::string(T("No se pudo iniciar build/xc3.exe (error ")) + std::to_string(GetLastError()) + ")"; return; }
     CloseHandle(pi.hThread);
     CloseHandle(pi.hProcess);
     g_status = rec_dir.empty() ? std::string(T("Juego iniciado. Registro: build/last_game.log")) : std::string(T("Juego iniciado. Grabando en ")) + rec_dir;
@@ -692,7 +754,7 @@ static bool pc_done() {
     while (fgets(line, sizeof line, f)) sscanf(line, "exe %lld %lld", &sz, &mt);
     fclose(f);
     struct stat es;
-    if (stat(path("build/xcde.exe").c_str(), &es) != 0) return true;
+    if (stat(get_game_exe_path().c_str(), &es) != 0) return true;
     return sz == (long long)es.st_size && mt == (long long)es.st_mtime;
 }
 static bool pc_running() {
@@ -706,7 +768,7 @@ static bool pc_running() {
 static void pc_start(bool then_play) {
 #ifdef _WIN32
     if (g_pc_proc) return;
-    std::string exe = path("build/xcde.exe");
+    std::string exe = get_game_exe_path();
     std::string cmd = "\"" + exe + "\" --precompile targets";
     const char *old = getenv("PATH");
     std::string p = std::string("C:\\msys64\\ucrt64\\bin;") + (old ? old : "");
@@ -1104,12 +1166,24 @@ static void tab_graphics() {
                           "Desactivado: imagen nítida (combínalo con SMAA para los bordes)."));
 #endif
     ImGui::Checkbox(T("Mostrar FPS en la barra de título"), &g.show_fps);
+    static const char *aniso_names[] = {"Default", "2x", "4x", "8x", "16x (Recomendado)"};
+    static const int aniso_vals[] = {0, 2, 4, 8, 16};
+    int ai = 0;
+    for (int i = 0; i < 5; i++) if (aniso_vals[i] == g.anisotropy) ai = i;
+    ImGui::SetNextItemWidth(260 * g_scale);
+    if (ImGui::Combo(T("Filtrado anisotrópico (AF)"), &ai, TL(aniso_names, 5).p, 5)) {
+        g.anisotropy = aniso_vals[ai];
+    }
+    ImGui::SetItemTooltip(T("Mejora notablemente la nitidez de texturas en superficies oblicuas o a distancia (suelos, rocas, caminos)\n"
+                          "sin costo apreciable en GPUs modernas."));
     section(T("Velocidad"));
     static const char *fps_ui[] = {"30 (como en Switch)", "60", "120", "144", "165", "Sin límite"};
 #ifndef GAME_XCDE
     // [XC3] 30 / 60 only (runtime/hle/framepace.c xc3_fps_frame: the 60 fps cheat's interval and frame time)
     if (g.fps > 1) g.fps = 1;
-    ImGui::Combo("FPS", &g.fps, TL(fps_ui, 2).p, 2);
+    if (ImGui::Combo("FPS", &g.fps, TL(fps_ui, 2).p, 2)) {
+        g.frame_lag = (g.fps == 1);  // [XC3] auto-enable frame lag (one frame in flight) when 60 fps is active
+    }
     ImGui::SetItemTooltip(T("60: el juego a 60 FPS fuera de las cinemáticas (que siguen a 30), como el parche de 60 FPS\n"
                           "de la comunidad. Necesita una GPU que lo mantenga: en zonas pesadas ayuda FSR en Rendimiento."));
 #else
@@ -1118,14 +1192,16 @@ static void tab_graphics() {
                           "la cámara queda un poco más lejos. El V-Sync forzado en el panel de NVIDIA / AMD o el límite\n"
                           "de RivaTuner también limitan los FPS: déjalos en 'configuración de la aplicación' / 0."));
 #endif
-    ImGui::Checkbox(T("V-Sync (con 30 / 60 FPS)"), &g.vsync);
-    ImGui::SetItemTooltip(T("Cada imagen se muestra exactamente una vez, sincronizada con la pantalla: movimiento\n"
-                          "fluido (sin imágenes repetidas o saltadas). Con más de 60 FPS o sin límite no se aplica."));
-#ifndef GAME_XCDE
-    ImGui::Checkbox(T("Frame lag (60 FPS)"), &g.frame_lag);  // [XC3] runtime/nvn/objects.c
-    ImGui::SetItemTooltip(T("Con 60 FPS, la GPU termina un frame mientras el juego prepara el siguiente: más FPS\n"
-                          "(p. ej. 49 -> 60 en Colony 9); la imagen va un frame (17 ms) por detrás de los controles."));
-#endif
+    static const char *vs_names[] = {"V-Sync ON (FIFO)", "Fast Sync (Mailbox)", "V-Sync OFF / VRR (Immediate)"};
+    int vsi = g.present_mode >= 0 && g.present_mode <= 2 ? g.present_mode : (!g.vsync ? 2 : 0);
+    ImGui::SetNextItemWidth(300 * g_scale);
+    if (ImGui::Combo(T("Sincronización vertical (V-Sync / VRR)"), &vsi, TL(vs_names, 3).p, 3)) {
+        g.present_mode = vsi;
+        g.vsync = (vsi != 2);
+    }
+    ImGui::SetItemTooltip(T("FIFO: V-Sync clásico sin tearing, sincronizado al refresco de la pantalla.\n"
+                          "Mailbox: Fast Sync / latencia mínima sin tearing.\n"
+                          "Immediate: V-Sync OFF, recomendado para monitores con G-Sync / FreeSync (VRR)."));
 #ifdef GAME_XCDE
     static const char *cut_ui[] = {"Como el resto del juego", "30 estables (como en Switch)"};
     ImGui::SetNextItemWidth(320 * g_scale);
@@ -1292,7 +1368,11 @@ static void make_report() {
     char stamp[32];
     time_t now = time(NULL);
     strftime(stamp, sizeof stamp, "%Y%m%d_%H%M%S", localtime(&now));
+#ifdef GAME_XCDE
     std::string zip = std::string("reports/xcde_report_") + stamp + ".zip";
+#else
+    std::string zip = std::string("reports/xc3_report_") + stamp + ".zip";
+#endif
     char sys[MAX_PATH];
     GetSystemDirectoryA(sys, sizeof sys);
     std::string tar = std::string(sys) + "\\tar.exe";
@@ -1446,7 +1526,7 @@ int main(int argc, char **argv) {
         if (GetModuleFileNameA(NULL, me, sizeof me) && GetFileAttributesExA(me, GetFileExInfoStandard, &a)) g_self_time = a.ftLastWriteTime;
     }
     bool have_game = exists("targets/exefs/main") || exists("targets/exefs");
-    bool have_exe = exists("build/xcde.exe");
+    bool have_exe = have_game_exe();
     bool run = true, launched = false;
     if (shot_pc) pc_start(false);
     bool shot_bd_started = false;
@@ -1474,12 +1554,6 @@ int main(int argc, char **argv) {
 #endif
         if (g_font_title) ImGui::PopFont();
         ImGui::TextDisabled("%s", T("Recompilación nativa para PC · configuración"));
-        {   // [XCDE] the launcher's own language (Spanish / English), saved with the settings
-            static const char *ll[] = {"Español", "English"};
-            ImGui::SameLine(ImGui::GetContentRegionMax().x - 330 * scale);
-            ImGui::SetNextItemWidth(150 * scale);
-            ImGui::Combo(T("Idioma del launcher"), &g.ui_lang, ll, 2);
-        }
         ImGui::Dummy(ImVec2(0, 4 * scale));
         float play_h = ImGui::GetFrameHeight() * 1.45f;
         float bottom = ImGui::GetFrameHeightWithSpacing() * (pc_running() ? 2.4f : 1.3f) + play_h + st.ItemSpacing.y;
@@ -1501,10 +1575,10 @@ int main(int argc, char **argv) {
         ImGui::EndChild();
         bd_poll();
         have_game = exists("targets/exefs/main") || exists("targets/exefs");  // (the tab may have set them up / built it)
-        have_exe = exists("build/xcde.exe");
+        have_exe = have_game_exe();
         if ((shot_bd || shot_bd_wait) && !shot_bd_started && g_gf_code == 0) { shot_bd_started = true; bd_start(); }
         if (!have_game) ImGui::TextColored(pal::warn, "%s", T("Faltan los archivos del juego en targets/ (exefs y romfs de tu copia)."));
-        else if (!have_exe) ImGui::TextColored(pal::warn, "%s", T("Falta build/xcde.exe (compila el juego primero)."));
+        else if (!have_exe) ImGui::TextColored(pal::warn, "%s", T("Falta build/xc3.exe (compila el juego primero)."));
         else ImGui::TextDisabled(T("%s"), g_status.empty() ? (pc_done() ? T("Listo. Guardado: save/   Ajustes: " INI_FILE)
                                                                    : T("Listo. La primera vez, JUGAR prepara los shaders antes (unos minutos)"))
                                                        : g_status.c_str());

@@ -286,8 +286,8 @@ static void log_to_file_without_console(void) {
 static void require_cpu(void) {
     unsigned a, b, c, d;
     if (__get_cpuid(1, &a, &b, &c, &d) && (c & (1u << 20)) /* SSE4.2 */ && (c & (1u << 23)) /* POPCNT */) return;
-    MessageBoxA(NULL, "Monado needs a CPU with SSE4.2 (Intel Nehalem / 2008 or newer, AMD Bulldozer / 2011 or newer).",
-                "Monado", MB_ICONERROR | MB_OK);
+    MessageBoxA(NULL, "XC3Recomp needs a CPU with SSE4.2 (Intel Nehalem / 2008 or newer, AMD Bulldozer / 2011 or newer).",
+                "XC3Recomp", MB_ICONERROR | MB_OK);
     ExitProcess(1);
 }
 
@@ -295,7 +295,7 @@ static void require_cpu(void) {
 void plat_fatal_notice(void) {
     if (!g_log_path[0]) return;
     fflush(stderr);
-    char text[1024] = "LAS Recomp stopped because of an error.";
+    char text[1024] = "XC3Recomp stopped because of an error.";
     FILE *f = fopen(g_log_path, "rb");
     if (f) {
         static char tail[16384];

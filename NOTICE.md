@@ -1,6 +1,6 @@
 # NOTICE
 
-Monado is an independent project, not affiliated with or endorsed by Nintendo or Monolith Soft. *Xenoblade
+XC3Recomp is an independent project, not affiliated with or endorsed by Nintendo or Monolith Soft. *Xenoblade
 Chronicles* is a trademark of Nintendo. This repository contains no game code, assets, keys, firmware or system
 fonts (see `CONTRIBUTING.md`, Article I). Players must supply files extracted from their own copy.
 

@@ -14,12 +14,12 @@ Done:
 - Vulkan renderer: Maxwell shaders translated to SPIR-V, precompiled shader cache, pipeline cache.
 - FSR 3.1 / FSR 4 in place of the game's own temporal upscale (DLSS path present, untested: AMD GPU).
 - Input (pad, keyboard, mouse), audio, movies, saves (with a backup per launch).
+- `nvnCommandBufferDrawTransformFeedback` implemented (translates captured vertices into synthesized array draws).
+- Vulkan executor: `CMD_WAIT_SYNC` (command 50) implemented with in-pass barrier flush.
 
 Open:
 - Black / red box by the Colony 9 waterfall: one draw (vs `61e0c6ed00`, fs `61e0c6f400`, G-buffer albedo pure red).
   Not caused by the alias-region pool reads (checked with `XC3_PMM_MIRROR=1`, deterministic replay). Cause open.
-- `nvnCommandBufferDrawTransformFeedback` not emulated (called in Colony 9).
-- Vulkan executor: command 50 unimplemented.
 - About 17 fragment shaders failed to translate (older note, to be rechecked).
 
 ## Phase 2: Gameplay compatibility and optimization

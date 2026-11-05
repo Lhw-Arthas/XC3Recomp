@@ -189,46 +189,19 @@ static void feed(ImGuiIO &io, uint32_t w, uint32_t h) {
     }
 }
 
-// [XCDE] the menu's language follows the launcher's (xcde.ini launcher_lang; g_settings.ui_lang 1 = English): the
-// Spanish text is the key, T() gives the English one.
 #ifdef GAME_XCDE
 #define INI_FILE "xcde.ini"
 #else
 #define INI_FILE "xc3.ini"
 #endif
 
-static const char *const k_en[][2] = {
-    {"Igual que la ventana (recomendado)", "Match the window (recommended)"}, {"1x - 720p (como Switch)", "1x - 720p (like Switch)"},
-    {"75 % de la ventana", "75 % of the window"}, {"50 % de la ventana", "50 % of the window"},
-    {"Dinámica (mantiene 60 FPS)", "Dynamic (holds 60 FPS)"}, {"Opciones  (F1 / Esc para volver al juego)", "Options  (F1 / Esc to go back to the game)"},
-    {"Gráficos", "Graphics"}, {"Pantalla", "Display"}, {"Pantalla completa", "Fullscreen"},
-    {"Resolución y escalado", "Resolution and scaling"}, {"Resolución interna", "Internal resolution"},
-    {"Bilineal (suave)", "Bilinear (soft)"}, {"AMD FSR 1.0 (nítido)", "AMD FSR 1.0 (sharp)"}, {"Escalado / antialiasing", "Upscaling / anti-aliasing"},
-    {"DLSS se carga al iniciar el juego: hasta reiniciar se usa FSR 3.1.", "DLSS loads when the game starts: FSR 3.1 is used until a restart."},
-    {"Nativo (solo antialiasing)", "Native (anti-aliasing only)"}, {"Calidad (67 %)", "Quality (67 %)"}, {"Equilibrado (59 %)", "Balanced (59 %)"},
-    {"Rendimiento (50 %)", "Performance (50 %)"}, {"Ultra rendimiento (33 %)", "Ultra performance (33 %)"}, {"Calidad del escalado", "Upscaling quality"},
-    {"Generación de frames (FSR 3; activarla por primera vez: al reiniciar)", "Frame generation (FSR 3; the first time it is enabled: after a restart)"},
-    {"Calidad", "Quality"}, {"Antialiasing SMAA", "SMAA anti-aliasing"}, {"(no se usa con FSR 3.1 / FSR 4 / DLSS)", "(not used with FSR 3.1 / FSR 4 / DLSS)"},
-    {"Profundidad de campo", "Depth of field"},
-    {"Antialiasing y desenfoque de movimiento del juego (al reiniciar)", "The game's anti-aliasing and motion blur (after a restart)"},
-    {"Mostrar FPS en la barra de título", "Show FPS"}, {"Velocidad", "Speed"}, {"30 (como en Switch)", "30 (like Switch)"},
-    {"Sin límite", "Unlimited"}, {"FPS (al reiniciar)", "FPS (after a restart)"}, {"V-Sync (con 30 / 60 FPS)", "V-Sync (at 30 / 60 FPS)"},
-    {"Frame lag (60 FPS, al reiniciar)", "Frame lag (60 FPS, after a restart)"},
-    {"Volumen", "Volume"}, {"Audio de los vídeos (al reiniciar)", "Video sound (after a restart)"}, {"Controles", "Controls"},
-    {"La asignación de teclas y botones se cambia en el launcher (Play XC3.bat), pestaña Controles.",
-     "Keys and buttons are remapped in the launcher, Controls tab."},
-    {"Guardar", "Save"}, {"Volver al juego", "Back to the game"}, {"Guardado en " INI_FILE, "Saved to " INI_FILE},
-};
-static const char *T(const char *es) {
-    if (g_settings.ui_lang != 1) return es;
-    for (const auto &e : k_en) if (!strcmp(e[0], es)) return e[1];
-    return es;
-}
-struct TList { const char *p[8]; };
-static TList TL(const char *const *a, int n) { TList t{}; for (int i = 0; i < n && i < 8; i++) t.p[i] = T(a[i]); return t; }
-
-static const char *const k_res_ui[] = {"Igual que la ventana (recomendado)", "1x - 720p (como Switch)", "2x - 1440p", "3x - 2160p",
-                                       "75 % de la ventana", "50 % de la ventana", "Dinámica (mantiene 60 FPS)"};
+#ifdef GAME_XCDE
+static const char *const k_res_ui[] = {"Match window (recommended)", "1x - 720p (like Switch)", "2x - 1440p", "3x - 2160p",
+                                       "75% of window", "50% of window", "Dynamic (holds 60 FPS)"};
+#else
+static const char *const k_res_ui[] = {"Match window (recommended)", "1x - 1080p (like Switch on TV)", "2x - 2160p (4K)", "3x - 3240p",
+                                       "75% of window", "50% of window", "Dynamic (holds 60 FPS)"};
+#endif
 static const int k_res_mode[] = {RES_MATCH, 1, 2, 3, RES_Q75, RES_Q50, RES_DYNAMIC};
 
 static void ui(void) {
@@ -237,72 +210,87 @@ static void ui(void) {
     ImGui::SetNextWindowPos(ImVec2(vp->Size.x * 0.5f, vp->Size.y * 0.5f), ImGuiCond_Always, ImVec2(0.5f, 0.5f));
     ImGui::SetNextWindowSize(ImVec2(vp->Size.y * 0.95f, vp->Size.y * 0.8f), ImGuiCond_Always);
     ImGui::SetNextWindowBgAlpha(0.92f);
-    ImGui::Begin(T("Opciones  (F1 / Esc para volver al juego)"), nullptr, ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoMove |
+    ImGui::Begin("Options  (F1 / Esc to return to game)", nullptr, ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoMove |
                  ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoSavedSettings);
     if (ImGui::BeginTabBar("tabs")) {
-        if (ImGui::BeginTabItem(T("Gráficos"))) {
-            ImGui::SeparatorText(T("Pantalla"));
-            if (ImGui::Checkbox(T("Pantalla completa"), &g_settings.fullscreen)) want_window = true;
-            ImGui::SeparatorText(T("Resolución y escalado"));
+        if (ImGui::BeginTabItem("Graphics")) {
+            ImGui::SeparatorText("Display");
+            if (ImGui::Checkbox("Fullscreen", &g_settings.fullscreen)) want_window = true;
+            ImGui::SeparatorText("Resolution and scaling");
             int ri = 0;
             for (int i = 0; i < 7; i++) if (k_res_mode[i] == g_settings.res_mode) ri = i;
-            if (ImGui::Combo(T("Resolución interna"), &ri, TL(k_res_ui, 7).p, 7)) g_settings.res_mode = k_res_mode[ri];
-            static const char *ups[] = {"Bilineal (suave)", "AMD FSR 1.0 (nítido)", "AMD FSR 3.1 (temporal)", "NVIDIA DLSS (temporal, RTX)",
+            if (ImGui::Combo("Internal resolution", &ri, k_res_ui, 7)) g_settings.res_mode = k_res_mode[ri];
+            static const char *ups[] = {"Bilinear (soft)", "AMD FSR 1.0 (sharp)", "AMD FSR 3.1 (temporal)", "NVIDIA DLSS (temporal, RTX)",
                                         "AMD FSR 4 (temporal, RDNA 4)"};
             static const int upv[] = {UPSCALE_BILINEAR, UPSCALE_FSR1, UPSCALE_FSR3, UPSCALE_DLSS, UPSCALE_FSR4};
             int ui_ = 0;
             for (int i = 0; i < 5; i++) if (upv[i] == g_settings.upscaler) ui_ = i;
-            if (ImGui::Combo(T("Escalado / antialiasing"), &ui_, TL(ups, 5).p, 5)) g_settings.upscaler = upv[ui_];
+            if (ImGui::Combo("Upscaling / anti-aliasing", &ui_, ups, 5)) g_settings.upscaler = upv[ui_];
             if (g_settings.upscaler == UPSCALE_DLSS && !dlss_available())
-                ImGui::TextColored(ImVec4(1, 0.8f, 0.3f, 1), T("DLSS se carga al iniciar el juego: hasta reiniciar se usa FSR 3.1."));
+                ImGui::TextColored(ImVec4(1, 0.8f, 0.3f, 1), "DLSS loads when the game starts: FSR 3.1 is used until a restart.");
             if (UPSCALE_TEMPORAL(g_settings.upscaler)) {  // [XC3] the scene's render size; no frame generation (launcher.cpp)
-                static const char *uq[] = {"Nativo (solo antialiasing)", "Calidad (67 %)", "Equilibrado (59 %)", "Rendimiento (50 %)",
-                                           "Ultra rendimiento (33 %)"};
-                ImGui::Combo(T("Calidad del escalado"), &g_settings.upscale_quality, TL(uq, 5).p, 5);
+                static const char *uq[] = {"Native (anti-aliasing only)", "Quality (67 %)", "Balanced (59 %)", "Performance (50 %)",
+                                           "Ultra performance (33 %)"};
+                ImGui::Combo("Upscaling quality", &g_settings.upscale_quality, uq, 5);
             }
             if (false) {
                 ImGui::BeginDisabled(g_settings.upscaler != UPSCALE_FSR3);
-                ImGui::Checkbox(T("Generación de frames (FSR 3; activarla por primera vez: al reiniciar)"), &g_settings.frame_gen);
+                ImGui::Checkbox("Frame generation (FSR 3; the first time it is enabled: after a restart)", &g_settings.frame_gen);
                 ImGui::EndDisabled();
             }
-            ImGui::SeparatorText(T("Calidad"));
+            ImGui::SeparatorText("Quality");
             bool smaa = g_settings.antialias == AA_SMAA;
             ImGui::BeginDisabled(UPSCALE_TEMPORAL(g_settings.upscaler));  // [XC3] (exec.c post_process: not with them)
-            if (ImGui::Checkbox(T("Antialiasing SMAA"), &smaa)) g_settings.antialias = smaa ? AA_SMAA : AA_OFF;
+            if (ImGui::Checkbox("SMAA anti-aliasing", &smaa)) g_settings.antialias = smaa ? AA_SMAA : AA_OFF;
             ImGui::EndDisabled();
-            if (UPSCALE_TEMPORAL(g_settings.upscaler)) ImGui::SameLine(), ImGui::TextDisabled(T("(no se usa con FSR 3.1 / FSR 4 / DLSS)"));
+            if (UPSCALE_TEMPORAL(g_settings.upscaler)) ImGui::SameLine(), ImGui::TextDisabled("(not used with FSR 3.1 / FSR 4 / DLSS)");
             bool dof = !g_settings.dof_off;
-            if (ImGui::Checkbox(T("Profundidad de campo"), &dof)) g_settings.dof_off = !dof;
-            ImGui::Checkbox(T("Antialiasing y desenfoque de movimiento del juego (al reiniciar)"), &g_settings.game_blur);
-            ImGui::Checkbox(T("Mostrar FPS en la barra de título"), &g_settings.show_fps);
-            ImGui::SeparatorText(T("Velocidad"));
+            if (ImGui::Checkbox("Depth of field", &dof)) g_settings.dof_off = !dof;
+            ImGui::Checkbox("Anti-aliasing and motion blur from game (after restart)", &g_settings.game_blur);
+            ImGui::Checkbox("Show FPS in title bar", &g_settings.show_fps);
+            ImGui::SeparatorText("Speed");
             static const int fpsv[] = {30, 60, 120, 144, 165, 0};
-            static const char *fpsu[] = {"30 (como en Switch)", "60", "120", "144", "165", "Sin límite"};
+            static const char *fpsu[] = {"30 (like Switch)", "60", "120", "144", "165", "Unlimited"};
             int fi = 0;
             for (int i = 0; i < 6; i++) if (fpsv[i] == g_settings.fps) fi = i;
             if (fi > 1) fi = 1;  // [XC3] 30 / 60 only (framepace.c xc3_fps_frame)
-            if (ImGui::Combo(T("FPS (al reiniciar)"), &fi, TL(fpsu, 2).p, 2)) g_settings.fps = fpsv[fi];
-            if (ImGui::Checkbox(T("V-Sync (con 30 / 60 FPS)"), &g_settings.vsync)) vk_request_swapchain_recreate();
-            ImGui::Checkbox(T("Frame lag (60 FPS, al reiniciar)"), &g_settings.frame_lag);  // [XC3] runtime/nvn/objects.c
+            if (ImGui::Combo("FPS (after restart)", &fi, fpsu, 2)) {
+                g_settings.fps = fpsv[fi];
+                g_settings.frame_lag = (g_settings.fps == 60);  // [XC3] auto-enable frame lag with 60 fps
+            }
+            static const char *aniso_names[] = {"Default", "2x", "4x", "8x", "16x (Recommended)"};
+            static const int aniso_vals[] = {0, 2, 4, 8, 16};
+            int ai = 0;
+            for (int i = 0; i < 5; i++) if (aniso_vals[i] == g_settings.anisotropy) ai = i;
+            if (ImGui::Combo("Anisotropic filtering (AF)", &ai, aniso_names, 5)) {
+                g_settings.anisotropy = aniso_vals[ai];
+            }
+            static const char *vs_names[] = {"V-Sync ON (FIFO)", "Fast Sync (Mailbox)", "V-Sync OFF / VRR (Immediate)"};
+            int vsi = g_settings.present_mode >= 0 && g_settings.present_mode <= 2 ? g_settings.present_mode : (!g_settings.vsync ? 2 : 0);
+            if (ImGui::Combo("Vertical sync (V-Sync / VRR)", &vsi, vs_names, 3)) {
+                g_settings.present_mode = vsi;
+                g_settings.vsync = (vsi != 2);
+                vk_request_swapchain_recreate();
+            }
             ImGui::EndTabItem();
         }
-        if (ImGui::BeginTabItem(T("Audio"))) {
+        if (ImGui::BeginTabItem("Audio")) {
             int vol = (int)lroundf(g_settings.volume * 100);
-            if (ImGui::SliderInt(T("Volumen"), &vol, 0, 200, "%d %%")) g_settings.volume = vol / 100.0f;
-            ImGui::Checkbox(T("Audio de los vídeos (al reiniciar)"), &g_settings.movie_audio);
+            if (ImGui::SliderInt("Volume", &vol, 0, 200, "%d %%")) g_settings.volume = vol / 100.0f;
+            ImGui::Checkbox("Video sound (after restart)", &g_settings.movie_audio);
             ImGui::EndTabItem();
         }
-        if (ImGui::BeginTabItem(T("Controles"))) {
-            ImGui::TextWrapped(T("La asignación de teclas y botones se cambia en el launcher (Play XC3.bat), pestaña Controles."));
+        if (ImGui::BeginTabItem("Controls")) {
+            ImGui::TextWrapped("Key and button bindings can be changed in the launcher (Play XC3.bat), Controls tab.");
             ImGui::EndTabItem();
         }
         ImGui::EndTabBar();
     }
     ImGui::Separator();
-    if (ImGui::Button(T("Guardar"))) { settings_save(); saved_note = true; }
+    if (ImGui::Button("Save")) { settings_save(); saved_note = true; }
     ImGui::SameLine();
-    if (ImGui::Button(T("Volver al juego"))) { open_ = false; input_reset(); }
-    if (saved_note) { ImGui::SameLine(); ImGui::TextDisabled(T("Guardado en " INI_FILE)); }
+    if (ImGui::Button("Back to the game")) { open_ = false; input_reset(); }
+    if (saved_note) { ImGui::SameLine(); ImGui::TextDisabled("Saved to " INI_FILE); }
     ImGui::End();
 }
 
