@@ -837,8 +837,12 @@ int vk_precompile_main(const char *root) {
         // [XCDE] T211: the build that precompiled. A new build may translate shaders differently (every translator fix
         // changes SPIR-V): its pieces would no longer match and the game compiled them while playing (10-58 ms hitches
         // on the first draws of each area). The launcher compares this line with build/xcde.exe and precompiles again.
+        // [XC3] the exe running this (build/xc3.exe, the launcher's choice): "build/xcde.exe" was named here, so with an
+        // old xcde.exe left beside xc3.exe the line never matched and the launcher precompiled at every Play
         struct stat es;
-        if (stat("build/xcde.exe", &es) == 0) fprintf(f, "exe %lld %lld%c", (long long)es.st_size, (long long)es.st_mtime, 10);
+        char self[1024];
+        if (!plat_exe_path(self, sizeof self)) snprintf(self, sizeof self, "build/xcde.exe");
+        if (stat(self, &es) == 0) fprintf(f, "exe %lld %lld%c", (long long)es.st_size, (long long)es.st_mtime, 10);
         fclose(f);
     }
     fflush(stdout);
