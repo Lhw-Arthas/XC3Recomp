@@ -421,10 +421,9 @@ PLAIN(nvnCommandBufferDrawArraysIndirect, CMD_DRAW_ARRAYS_INDIRECT)
 PLAIN(nvnCommandBufferDrawElementsIndirect, CMD_DRAW_ELEMENTS_INDIRECT)
 NVN(nvnCommandBufferMultiDrawArraysIndirectCount) { (void)c; }
 NVN(nvnCommandBufferMultiDrawElementsIndirectCount) { (void)c; }
-NVN(nvnCommandBufferDrawTransformFeedback) {  // [XCDE] T136: not emulated - say so once if the game ever uses it
-    static int told;
-    if (!told++) LOG("[xfb] nvnCommandBufferDrawTransformFeedback called (not emulated)\n");
-    (void)c;
+NVN(nvnCommandBufferDrawTransformFeedback) {  // [XC3] DrawTransformFeedback (record mode and stream for executor)
+    Snap s = snap(c);
+    record(c, CMD_DRAW_TRANSFORM_FEEDBACK, 0, &s);
 }
 NVN(nvnCommandBufferDrawTexture) { (void)c; }
 PLAIN(nvnCommandBufferDispatchCompute, CMD_DISPATCH)

@@ -1,293 +1,218 @@
-# Monado
+# XC3Recomp (Xenoblade Chronicles 3)
 
 > [!IMPORTANT]
 > **This project was made almost entirely with AI.** Nearly all of the code, tooling, reverse engineering and
 > documentation was written by an AI (Anthropic's Claude, through Claude Code), directed, tested and reviewed by a
 > human. It is shared as is, in the hope that someone takes it further. You run it at your own discretion.
 
-**Monado** is a static recompilation of *Xenoblade Chronicles: Definitive Edition* (Nintendo Switch, 2020) into a
-native Windows x86-64 application with a Vulkan renderer. It is **not an emulator**: the game's ARM64 code is
-translated ahead of time into C and compiled for your PC, and the console's operating system and graphics API (NVN)
-are reimplemented on top of Windows and Vulkan.
+**XC3Recomp** is a static recompilation of *Xenoblade Chronicles 3* (Nintendo Switch, 2022) into a native Windows
+x86-64 application with a Vulkan renderer. It is **not an emulator**: the game's ARM64 code is translated ahead of
+time into C and compiled natively for your PC, and the console's operating system and graphics API (NVN) are
+reimplemented on top of Windows and Vulkan.
 
-It is built on [LASRecomp](https://github.com/peiikai/LASRecomp) (MIT), the static recompilation of *Link's
-Awakening*, whose generator and runtime it adapts. Internally the project still uses its working name **XCDE**
-(`build/xcde.exe`, `XCDE_*` environment variables, `[XCDE]` marks in the code).
+It evolves from **Monado** (the static recompilation of *Xenoblade Chronicles: Definitive Edition*) and
+[LASRecomp](https://github.com/peiikai/LASRecomp) (MIT), adapting their generator and dedicated runtime. User-facing
+tooling and configuration are specialized for XC3 (`Build XC3.bat`, `Play XC3.bat`, `build/xenoblade3_launcher.exe`,
+`build/xc3.exe`, `xc3.ini`), while compatibility with legacy `XCDE` variables and profiles is preserved.
 
 > [!NOTE]
-> **No game files are included.** You need your own legally obtained copy of the game, **version 2.0.0** (the base
-> game with the 2.0.0 update applied), extracted to an `exefs` folder and a `romfs` folder. Instructions on how to
+> **No game files are included.** You need your own legally obtained copy of the game, **version 2.2.0** (the base
+> game with the 2.2.0 update applied), extracted to an `exefs` folder and a `romfs` folder. Instructions on how to
 > obtain or extract these files will **not** be provided. Everything derived from the game (the recompiled code,
 > translated shaders, caches) is generated on your own machine and never belongs in this repository.
 
 ## Status
 
-The whole game is playable on Windows with an NVIDIA RTX GPU: the story, battles, side quests, Heart-to-Hearts,
-*Future Connected*, menus, cutscenes and videos with audio. The original developer considers it finished for their own
-PC and is looking for someone to continue it, above all on **AMD, Intel and lower-end hardware**, which are largely
-untested. See [Known issues](#known-issues) and [Where the knowledge is](#where-the-knowledge-is).
+The project is currently in active development (**Phases 1 & 2** of the [Roadmap](docs/ROADMAP.md)):
+- **Playable areas:** The opening sequence, title screen, early cutscenes, and Colony 9 are running with full audio, video playback, and controls on Windows (tested on NVIDIA RTX and AMD GPUs).
+- **Performance & graphics features:** In-place alias memory pool reads, multi-threaded Zstd-compressed SPIR-V shader cache reads, automatic ASTC GPU compute shader decoding, transform feedback draw support (`nvnCommandBufferDrawTransformFeedback`), GPU queue sync (`CMD_WAIT_SYNC`), shadow-pass async builds, forced 16x anisotropic filtering, and a 60 FPS mode with a frame-lag reduction option.
+- **Under active work:** Visual fixes (e.g. Colony 9 waterfall draw artifact) and testing gameplay stability across later regions and extended battles. See [Known issues](#known-issues) and [`docs/ROADMAP.md`](docs/ROADMAP.md).
 
 ## Features
 
 **Graphics**
-- Internal resolution: match the window (default), 1x–3x the Switch's image (up to 4K), 75 % / 50 % of the window, or
-  dynamic resolution that follows performance. Ultrawide windows keep their shape.
+- Internal resolution: match the window (default), 1x–3x the Switch's resolution (up to 4K), 75 % / 50 % of the window, or dynamic resolution following performance. Ultrawide displays maintain correct aspect ratios.
 - Upscaling and anti-aliasing:
-  - spatial: AMD FSR 1.0;
-  - temporal: AMD FSR 3.1 or NVIDIA DLSS (with native-AA / DLAA modes);
-  - extra: SMAA.
-- FSR 3 frame generation, everywhere or only in cutscenes (an even 60 on screen for scenes the game animates at 30).
-- Toggles for the game's own depth of field, temporal AA and motion blur (tuned for the Switch's 720p).
+  - Spatial: AMD FSR 1.0;
+  - Temporal: AMD FSR 3.1 / FSR 4 or NVIDIA DLSS (with native-AA / DLAA modes);
+  - Extra: SMAA (automatically bypassed when temporal upscalers like FSR/DLSS are active).
+- Shader precompilation: Ahead-of-time pipeline building to eliminate in-game shader compilation stutters. The SPIR-V cache is packed into `cache/spirv.pack`.
 
 **Frame rate**
-- 30 / 60 / 120 / 144 / 165 / unlimited without changing the speed of the world, the clock or cutscenes.
-- Optional steady-30 cutscenes and V-Sync.
+- 30 / 60 FPS options (the 60 FPS option is adapted from the community 60 FPS patch; cutscenes remain locked at a steady 30 FPS).
+- Automatic frame-lag reduction at 60 FPS: allows one frame in flight for lower latency, smoother frametimes, and holding 60 FPS in heavy areas.
+- V-Sync toggle.
 
-**Controls**
-- Keyboard and mouse in an MMO-style layout: mouse camera, keys 1–8 + T fire the arts in the palette.
-- Every key, mouse button and controller button can be remapped.
-- Button prompts drawn from your own key bindings. Xbox / PlayStation icon packs (third-party, from GameBanana, not
-  included) are picked by the connected controller.
-- Configurable stick dead zone for controllers with drift.
-- Xenoblade 3-style party switching (hold L2, press L1 / R1) in the field and in battle.
+**Controls & UI**
+- Full Keyboard and Mouse support with camera mouse-look, plus configurable sensitivity and keybindings.
+- Controller support with full button remapping and customizable stick dead zones.
+- Dynamic button prompts: keyboard layout prompts and Xbox / PlayStation controller icon packs (supported via `mods/`).
+- Cursor auto-hide while the game window is focused.
 
-**Robustness**
-- **Shader precompilation:** a seed of ~30,000 pipeline variants built ahead of time, so the first visit to an area
-  doesn't stop to compile. The SPIR-V cache is a single file (`cache/spirv.pack`).
-- **Safe saves:** the game's save commits are honoured with a journal, so a crash in the middle of a save rolls back
-  to the last good one. Every session keeps an automatic backup (`save/backup/`, the newest 5).
-- **Diagnostics:** crash reports with minidumps, a hang watchdog, and a launcher button that zips the logs for a bug
-  report.
-- **Low-end aware:** RAM size, integrated GPUs and core count are detected, and caches, budgets and thread counts are
-  scaled to them. The target is a Ryzen 3 3200G (Vega 8) with 8 GB at 720p.
+**Robustness & Diagnostics**
+- **Safe saves:** Save commits are verified with an automated backup system kept per session (`save/backup/`).
+- **Session recordings & replay:** Built-in session recorder (`play/<timestamp>`) for diagnostics, regression testing, and performance profiling.
+- **Hardware-aware scaling:** Detects CPU core counts and GPU capabilities, tuning thread pools and memory budgets accordingly.
 
-**Launcher and mods**
-- A launcher (English / Spanish) for every setting, the shader precompilation and the bug report.
-- Mods: romfs mods in `mods/<name>/romfs/` (the same layout as Ryujinx / yuzu). Code mods (exefs, IPS / pchtxt) don't
-  apply to a recompilation.
+**Launcher & Setup**
+- **Xenoblade Chronicles 3 Launcher** (`build/xenoblade3_launcher.exe`): modern dark theme, dedicated tabs for graphics, controls, and an "Install & build" tab with game file picker, version validation, and single-click builds.
+- Romfs mod support via `mods/<name>/romfs/`.
 
 ## Requirements
 
-- **OS:** Windows 10 / 11, x86-64 (x86-64-v2: SSE4.2, no AVX needed).
-- **GPU:** Vulkan 1.3.
-  - **Tested:** NVIDIA RTX.
-  - **Not verified on real hardware:** AMD and Intel (including iGPUs). Fixes are in place, but reports are welcome.
-- **RAM:** 8 GB minimum (tight), 16 GB recommended. The game's own heap is 3.2 GB; see Known issues.
-- **Disk:** ~15 GB for the game files, ~5 GB for the build, plus caches.
+- **OS:** Windows 10 / 11, x86-64 (x86-64-v2: SSE4.2 minimum).
+- **GPU:** Vulkan 1.3 compatible GPU.
+  - **Tested:** NVIDIA GeForce RTX series and modern AMD Radeon GPUs.
+  - **Intel / iGPUs:** Basic support logic present, but community testing and reports are welcome.
+- **RAM:** 8 GB minimum, 16 GB recommended. The game heap is ~3.25 GB (`0xD0000000`).
+- **Disk:** ~16 GB for the game files, ~5 GB for build outputs and caches.
 - **Your game files:** see the next section.
 
 ## Game files: what and where
 
-You need the game's own files, from your own copy of Xenoblade Chronicles: Definitive Edition. Instructions on how
-to obtain them are **not** provided.
+You need the game files extracted from your own copy of **Xenoblade Chronicles 3**. Instructions on how to dump or extract them are **not** provided.
 
-**Format:** plain extracted folders, not packages. An `.nsp`, `.xci` or `.nca` is refused: those are game
-packages, not game files.
+**Format:** Plain extracted folders, not packages. Archives such as `.nsp`, `.xci`, `.nca`, `.nsz`, or `.xcz` are rejected.
 
-**Version:** exactly 2.0.0 (title ID `0100ff500e34a000`). This means the base game with the 2.0.0 update applied:
-- `exefs` is the update's: its `main` is the 2.0.0 one;
-- `romfs` is the base romfs with the update's files laid over it.
+**Version:** Exactly **2.2.0** (title ID `010074f013262000`). This requires the base game with the 2.2.0 update applied:
+- `exefs/` must match version 2.2.0:
+  - `main` (build-id `82d187fe9ef9be92`)
+  - `main.npdm`
+  - `rtld` (build-id `e79ab9af2ab05174`)
+  - `sdk` (build-id `e8cdceb1e77a8465`)
+  - `subsdk0` (build-id `be1ee79a9968a35a`)
+- `romfs/` must contain the update's files layered over the base game (250 files across root, `movie/`, `sound/`, etc., ~15.2 GB total).
 
-The base game alone (1.0.0) does not work: the recompiled code is the 2.0.0 `main`.
-
-**Layout:** one folder holding both:
+**Layout:**
 ```
-<any folder>/
+<your game folder>/
 ├── exefs/
-│   ├── main          (the game; build-id 7e1df8e08d60544b)
+│   ├── main          (build-id: 82d187fe9ef9be92)
 │   ├── main.npdm
-│   ├── rtld
-│   ├── sdk           (build-id ad3fdfbd62a5f4b0)
-│   └── subsdk0
-└── romfs/            (18,529 files, 13.6 GB)
-    ├── bdat/
-    ├── chr/
-    ├── ...
+│   ├── rtld          (build-id: e79ab9af2ab05174)
+│   ├── sdk           (build-id: e8cdceb1e77a8465)
+│   └── subsdk0       (build-id: be1ee79a9968a35a)
+└── romfs/
+    ├── movie/
+    ├── sound/
+    └── ...
 ```
 
-**Where:** anywhere on your disk.
-- With `Build Monado.bat`, you pick that folder and it links `targets\exefs` and `targets\romfs` to it. Nothing is
-  copied, and the folder you pick may also be a few levels above `exefs`/`romfs`.
-- By hand, put (or link) them at `targets/exefs/` and `targets/romfs/` in this repository.
-
-`tools/extract/check_dump.py targets` verifies them:
-- the exefs, by build-id;
-- the romfs, against a per-folder manifest of names and sizes.
-
-If it fails, it says which files are missing or different. It reports a wrong version (a 1.0.0 `main`, for
-example) separately.
+**Setup:**
+- In `Build XC3.bat` or the launcher's **Install & build** tab, choose that folder to link it to `targets/exefs` and `targets/romfs` automatically.
+- Alternatively, create directory links manually: `targets/exefs/` and `targets/romfs/`.
+- Verify the dump using the verification tool:
+  ```bash
+  python tools/extract/check_dump.py targets
+  ```
 
 ## Building
 
-The build runs the recompiler on your machine, from your own game files. It takes 10–20 minutes the first time and
-~5 GB of disk. You need [Git for Windows](https://git-scm.com/download/win) (the build scripts run in Git Bash).
+The build runs the recompiler on your machine to translate the game's code, then compiles it with the dedicated runtime. It takes approximately 10–20 minutes on the first build.
 
-### The easy way: `Build Monado.bat`
+### The easy way: `Build XC3.bat`
 
-Run `Build Monado.bat` from the repository root. It does three things, asking before anything is installed:
-1. **Tools:** if they aren't set up, it runs `tools\setup_windows.ps1`, which installs MSYS2 with SDL3, FFmpeg,
-   Vulkan, shaderc, VMA and Opus, plus Python 3.12 (via winget), and creates `.venv` with the recompiler's packages.
-2. **Your game files:** choose the folder that has the game's `exefs` and `romfs` folders in it (or a folder above
-   them: they are found up to 4 levels down).
-   - `.xci` / `.nsp` / `.nca` packages are refused without being read: the game's own extracted files are needed.
-   - The version (2.0.0) and the romfs contents are checked.
-   - `targets\` is then linked to those folders, so nothing is copied.
+Run `Build XC3.bat` from the repository root:
+1. **Tools:** If tools are missing, it runs `tools\setup_windows.ps1` to install MSYS2 with SDL3, FFmpeg, Vulkan, shaderc, VMA, and Opus, installs Python 3.12 (via winget), and initializes `.venv` with the necessary packages.
+2. **Game files:** Select the folder containing your extracted `exefs` and `romfs` (version 2.2.0). It verifies file hashes and build-IDs, then links `targets/`.
+3. **Build:** Runs `scripts/build_all.sh` to recompile the ARM64 binaries to C, compile the native game objects, build the runtime executable (`build/xcde.exe`), and build the launcher (`build/xenoblade3_launcher.exe`).
 
-   This is `tools\setup_game_files.ps1`.
-3. **Build:** `scripts/build_all.sh` checks the files, recompiles the game code, compiles it with the runtime and
-   builds the launcher. The log goes to `build\build_all.log`.
-
-When it finishes it offers to start the launcher: press **Precompile shaders** once, then **PLAY**.
+When finished, launch the game with `Play XC3.bat`. On the first launch, click **Precompile shaders**, then click **PLAY**. Shaders are automatically compressed into `cache/spirv.pack` using Zstandard (Zstd), keeping the cache footprint around ~2.5–3.5 GB (down from ~15 GB uncompressed). Existing uncompressed caches can be compressed with `build/xc3.exe --repack-spirv` or `python tools/repack_spirv.py`.
 
 ### By hand
 
-1. **Install the tools** (or run `powershell -ExecutionPolicy Bypass -File tools\setup_windows.ps1`).
-   - [MSYS2](https://www.msys2.org/) at `C:\msys64`. In its UCRT64 shell, install the libraries the runtime links
-     against:
-     ```
+1. **Install required tools** (or run `powershell -ExecutionPolicy Bypass -File tools\setup_windows.ps1`):
+   - [MSYS2](https://www.msys2.org/) with UCRT64 libraries:
+     ```bash
      pacman -S mingw-w64-ucrt-x86_64-sdl3 mingw-w64-ucrt-x86_64-vulkan-devel mingw-w64-ucrt-x86_64-shaderc \
                mingw-w64-ucrt-x86_64-vulkan-memory-allocator mingw-w64-ucrt-x86_64-ffmpeg mingw-w64-ucrt-x86_64-opus
      ```
-   - Python 3.12+ and Git for Windows (the scripts run in Git Bash).
-   - A virtual environment in the repository root, with the generator's packages and the Zig toolchain (used as the
-     C compiler):
-     ```
+   - Python 3.12+ and [Git for Windows](https://git-scm.com/download/win).
+   - Python virtual environment with Zig (used as the C compiler) and binary analysis tools:
+     ```bash
      python -m venv .venv
      .venv/Scripts/pip install capstone unicorn lz4 ziglang
      ```
-2. **Place your game files** in `targets/exefs/` and `targets/romfs/` (or run `tools\setup_game_files.ps1`), then
-   check them:
-   ```
+2. **Place and verify game files:**
+   Link your files to `targets/exefs/` and `targets/romfs/`, then run:
+   ```bash
    python tools/extract/check_dump.py targets
    ```
-3. **Recompile the game code** into C (`generated/`, ~240 MB, never commit it):
-   ```
+3. **Recompile the game code to C** (`generated/`, ~240 MB):
+   ```bash
    cd tools && ../.venv/Scripts/python -X utf8 gen_all.py --out ../generated && cd ..
    ```
-4. **Compile the game objects and the runtime** (in Git Bash; `scripts/build_all.sh` runs steps 2–4 in one go). The boot script also links a window-less dev exe from an old milestone that no longer links; `XCDE_SKIP_BOOT_LINK=1` skips it:
+4. **Compile game objects and runtime** (in Git Bash):
+   ```bash
+   XCDE_SKIP_BOOT_LINK=1 scripts/build_boot.sh   # Recompiled game -> build/obj/
+   scripts/build_rt_gfx.sh                       # Runtime + Vulkan renderer -> build/xc3.exe
+   tools/launcher/build.sh                       # Launcher -> build/xenoblade3_launcher.exe
    ```
-   XCDE_SKIP_BOOT_LINK=1 scripts/build_boot.sh   # the recompiled game -> build/obj/
-   scripts/build_rt_gfx.sh                       # the runtime + Vulkan renderer -> build/xcde.exe
-   tools/launcher/build.sh                       # the launcher -> build/xenoblade3_launcher.exe (XCDE: build/xcde_launcher.exe)
-   ```
-5. **Optional: temporal upscalers.** FSR 3.1 and DLSS need vendor DLLs that aren't redistributed here: the AMD
-   FidelityFX SDK 1.1.4 (signed prebuilt DLL) and NVIDIA Streamline 2.14.16. Download them yourself and run
-   `SDK_DIR=<folder> scripts/copy_upscaler_dlls.sh`, which copies them next to `build/xcde.exe`. Without them, those
-   options fall back to FSR 1.0.
-6. **Play:** run `Play Monado.bat`. The first time, press **Precompile shaders** (a few minutes) and then **PLAY**.
-
-`scripts/ci.sh` runs the unit tests (no game data needed); `scripts/native_tests.sh` the C tests.
+5. **Optional upscaler DLLs:** FSR 3.1 and DLSS require vendor DLLs that are not redistributed here (AMD FidelityFX SDK 1.1.4 and NVIDIA Streamline 2.14.16). Place them using `scripts/copy_upscaler_dlls.sh`.
+6. **Launch:** Run `Play XC3.bat` or start `build/xenoblade3_launcher.exe`.
 
 ## Settings
 
-Everything is set in the launcher and saved to `xcde.ini` in the repository root. Useful keys:
+Settings are managed via the launcher or directly in `xc3.ini` in the repository root:
 
-| Key | Values |
-|---|---|
-| `resolution` | `match`, `1`–`3`, `75%`, `50%`, `dynamic` |
-| `upscaler` / `upscale_quality` | `bilinear` `fsr` `fsr3` `dlss` / `native` `quality` `balanced` `performance` `ultra` |
-| `frame_gen`, `antialias` | `0/1`, `smaa` / `off` |
-| `fps`, `vsync`, `cutscenes` | `30` `60` `120` `144` `165` `unlimited`, `0/1`, `same` / `30` / `30fg` |
-| `depth_of_field`, `game_blur` | `0/1` |
-| `language` | `auto`, `en-US`, `es`, `fr`, `de`, `it`, `ja` (the game's text; only what your copy includes) |
-| `stick_deadzone` | `0`–`30` (% of the stick's travel; 0 = raw) |
-| `bind_key_*`, `bind_pad_*`, `mouse_look`, `mouse_sens` | controls |
-| `mod_<folder>` | `0/1` |
-| `launcher_lang` | `en` / `es` |
+| Key | Values | Description |
+|---|---|---|
+| `resolution` | `match`, `1`–`3`, `75%`, `50%`, `dynamic` | Rendering resolution scale |
+| `upscaler` | `bilinear`, `fsr`, `fsr3`, `dlss` | Upscaling method |
+| `upscale_quality` | `native`, `quality`, `balanced`, `performance`, `ultra` | Quality preset for temporal upscalers |
+| `fps` | `30`, `60` | Target framerate |
+| `frame_lag` | `0`, `1` | One frame in flight at 60 FPS to reduce latency |
+| `vsync` | `0`, `1` | Vertical sync |
+| `cutscenes` | `same`, `30`, `30fg` | Framerate behaviour during cutscenes |
+| `antialias` | `smaa`, `off` | Post-process anti-aliasing |
+| `language` | `auto`, `en-GB`, `en-US`, `ja`, `fr`, `de`, `it`, `es` | In-game text language |
+| `stick_deadzone` | `0`–`30` | Analog stick deadzone percentage |
+| `bind_key_*`, `bind_pad_*` | Various | Key and controller bindings |
+| `mod_<folder>` | `0`, `1` | Enable or disable specific romfs mods |
 
-In game, **F1** opens the overlay menu.
-
-Advanced switches are environment variables (`XCDE_*`, `LARECOMP_*`). The most useful are listed in
-`docs/dev/HANDOFF.md`, and `grep -rn 'getenv("XCDE_' runtime` lists them all. A few:
-- `XCDE_PIPE_BUDGET` / `XCDE_LIB_BUDGET`: pipeline / library memory caps.
-- `XCDE_LOWSPEC_CPUS=4`: simulate a 4-core CPU.
-- `LARECOMP_VK_VALIDATION=1`: the Vulkan validation layer.
-- `XCDE_DETERMINISTIC=1`: deterministic replay.
+In game, **F1** opens the settings overlay.
 
 ## Known issues
 
-- **Only really tested on NVIDIA.**
-  - AMD and Intel GPUs have fixes from other recomps' bug reports: trailing empty colour attachments on Intel, D32S8
-    depth, D16 shadow-compare rounding. None is confirmed on the hardware.
-  - Integrated GPUs with 8 GB of RAM are the big unknown: the game's 3.2 GB heap is imported into the GPU in one block,
-    which failed on an AMD iGPU in another recomp. The fix (a windowed import) is designed but untested: task T244.
-- **Memory in very long sessions.** Our caches are capped by RAM size (pipelines and pipeline libraries are evicted).
-  The graphics driver's own memory still grows as new shaders compile: ~0.6 GB/h in a worst-case test hopping between
-  every map on NVIDIA (T246). Normal sessions are fine. On 8 GB machines, hours of map hopping can end in stutter;
-  restarting the game resets it.
-- **First run:** shader precompilation takes a few minutes. After a GPU driver update the driver's own cache is cold
-  and the first visit to an area can hitch a little.
-- **Build dependencies:** the build depends on MSYS2 runtime DLLs. A self-contained package (`scripts/make_dist.sh`
-  copies the DLLs next to the exe) exists for local use, but there's no release builder.
-- **Paths:** non-Latin characters in paths (a Cyrillic or CJK user name) aren't supported; accents and spaces are fine.
-- **Minor and open:**
-  - One vertex shader uses `SHFL` (a warp shuffle), approximated as lane-local.
-  - Deterministic replays drift by a few pixels after ~2,000 frames (T124).
-  - 9 of the 65 Heart-to-Hearts don't trigger from the test tours, probably because of affinity requirements;
-    unconfirmed in normal play.
-- **Linux / macOS:** code paths inherited from LASRecomp exist (`runtime/platform/linux.c`), but this project was only
-  built and tested on Windows.
+- **Early development status:** Active testing is currently focused on the opening and Colony 9 areas. Extended gameplay in later chapters, long battle encounters, and deep story progression are undergoing validation.
+- **Graphical quirks:**
+  - Red / black box artifact near the Colony 9 waterfall (one draw call undergoing investigation).
+- **Memory scaling in long sessions:** Pipeline libraries and driver memory grow over multi-hour play sessions; restarting periodically resolves any accumulated stutter.
+- **Platform support:** Currently focused on Windows x86-64 with Vulkan 1.3.
 
 ## Where the knowledge is
 
-This repository is meant to let someone else continue the work. Start here:
+For developers looking to inspect or contribute to the project:
 
-| Document | What it holds |
+| Document | Description |
 |---|---|
-| [`docs/dev/HANDOFF.md`](docs/dev/HANDOFF.md) | The running development record, **newest first**: what each session did, the current state, open problems, pitfalls, measured results. The first sections are the most up to date. |
-| [`docs/dev/tasks.md`](docs/dev/tasks.md) | Every task (T001–T246) with its status, evidence and the reasoning behind it, including what was tried and dropped. |
-| [`docs/RECOMP_KNOWLEDGE.md`](docs/RECOMP_KNOWLEDGE.md) | Lessons from reviewing ~20 other Switch recomps / PC ports (commits and issues), by topic, useful for **any** recomp, with this project's status per item. |
-| [`docs/LESSONS_FOR_XC2.md`](docs/LESSONS_FOR_XC2.md) | What carries over to *Xenoblade 2*, *3* and *X* (same engine family), and what won't. |
-| [`CONTRIBUTING.md`](CONTRIBUTING.md) | The project rules (no game data, attribution, tests first) and the working method, including how to prove a change doesn't regress anything. |
-| [`docs/dev/spec.md`](docs/dev/spec.md), [`plan.md`](docs/dev/plan.md), [`research.md`](docs/dev/research.md) | The original requirements, architecture and game facts (modules, SDK, services, memory, audio, video). |
-| `docs/adr/`, `docs/contracts/` | Design decisions and interfaces. |
-| `docs/spec_lowend_gpu.md`, `docs/handoff_shader_pipeline.md`, `docs/graphics_options_research.md`, `docs/lessons_*.md` | Deep dives: low-end / non-NVIDIA work, the shader and pipeline system, graphics options, reviews of other projects. |
-| `docs/hle_audit.md` | Every SVC, service and HLE function with its fidelity class (generated). |
-
-### Main things learnt
-- **The GPU side was most of the work.** NVN is reimplemented on Vulkan and Maxwell shaders are translated to GLSL /
-  SPIR-V. Most bugs were in barriers, texture aliasing, formats, transform feedback, occlusion queries and races with
-  the asynchronous render worker. The fixes are recorded task by task.
-- **Stutter:** pipeline variants are recorded while playing, merged into a seed (`data/variants_seed.bin`) and built
-  ahead of time with graphics pipeline libraries, then prewarmed per area at the loading screen.
-- **Deterministic mode** (one guest thread at a time, virtual time) plus per-frame hashes made every rendering change
-  provable. Use it before trusting any performance or refactoring change.
-- **Kernel details matter:**
-  - Horizon's condvar sets its key before releasing the mutex.
-  - Address arbiters must use compare-and-swap.
-  - Thread stacks must be reserved, not committed (they were 10 GB of commit).
-- **Memory:** the growth in long sessions came from pipeline libraries that were never freed (now evicted with
-  reference counting, because NVIDIA crashes if a linked pipeline's library goes away) and from the driver itself.
-  Pipelines themselves cost ~0.025 MB each.
-- **Audio:** feeder threads need high priority on 4-core CPUs (7 vs 63 underruns in 5 minutes on 2 cores).
-
-### Tried and dropped (measured)
-- `VK_EXT_extended_dynamic_state3` to cut pipeline variants: only −1 % on this game.
-- Native host `memcpy`: no guest function exceeds 1 % of the CPU.
-- A per-thread pipeline cache; spin-before-sleep on locks.
-- Hold-the-frame at loading screens: the game dropped cutscenes.
-- See `docs/dev/tasks.md` and the HANDOFF for each one's numbers.
+| [`docs/ROADMAP.md`](docs/ROADMAP.md) | Current project phases, completed features, open tasks, and active goals for XC3. |
+| [`docs/RECOMP_KNOWLEDGE.md`](docs/RECOMP_KNOWLEDGE.md) | Knowledge base and bug solutions collected from ~20 public Switch recompilation projects. |
+| [`docs/LESSONS_FOR_XC2.md`](docs/LESSONS_FOR_XC2.md) | Engine comparison and shared architecture notes across the Xenoblade series. |
+| [`CONTRIBUTING.md`](CONTRIBUTING.md) | Project constitution (clean room principles, zero copyright assets, attribution, test discipline). |
+| [`docs/dev/HANDOFF.md`](docs/dev/HANDOFF.md) | Session-by-session technical log, measured performance numbers, and debugging findings. |
+| [`docs/hle_audit.md`](docs/hle_audit.md) | Audit of Horizon OS SVCs, IPC services, and HLE implementation fidelity. |
 
 ## Repository layout
 
 ```
-runtime/        the recompiled game's host: loader, kernel (SVC, threads, sync), IPC services, HLE, NVN -> Vulkan,
-                Maxwell shader translator, audio, video, input, diagnostics
-tools/          recompiler (lifter/), dump check (extract/), launcher/, test and analysis tools
-games/xcde/     the game profile: build-ids, modules, patches, HLE symbol and class lists
-scripts/        build, test-drive and soak scripts (Git Bash)
-tests/          unit tests (no game data), native C tests, input routes, test tours
-data/           variants_seed.bin: pipeline variants to precompile (state keys, no game content)
-docs/           everything above
-third_party/    Dear ImGui, SMAA, AMD FidelityFX API headers, NVIDIA Streamline headers, bcdec
+runtime/        Dedicated runtime: loader, kernel (SVCs, threads, sync), IPC services, HLE,
+                NVN -> Vulkan translation, Maxwell shader translator, audio/video, input, diagnostics
+tools/          Recompiler lifter (AArch64 -> C), dump extraction validator, launcher, test tooling
+games/xc3/      Active game profile: Xenoblade Chronicles 3 (v2.2.0 build-IDs, modules, patches, HLE symbols)
+games/xcde/     Legacy game profile: Xenoblade Chronicles: Definitive Edition (selectable via XCDE_GAME=xcde)
+scripts/        Automated build, test, and run scripts (Git Bash)
+tests/          Unit tests, native C test suites, input replay tests
+data/           variants_seed.bin: Precompiled pipeline variant state keys (no game content)
+docs/           Architecture notes, roadmap, research documents, and handoffs
+third_party/    Dear ImGui, SMAA, AMD FidelityFX headers, NVIDIA Streamline headers, bcdec
 ```
 
 ## Credits and license
 
-- [LASRecomp](https://github.com/peiikai/LASRecomp) by Peiikai (MIT): the recompiler and runtime this project is
-  derived from. Every change to its files is marked `[XCDE]` and listed in `docs/UPSTREAM.md`.
-- Ideas (never code) from many other recomp and port projects, listed in `docs/RECOMP_KNOWLEDGE.md` and `NOTICE.md`.
-- Third-party components and their licences: `NOTICE.md`.
+- [LASRecomp](https://github.com/peiikai/LASRecomp) by Peiikai (MIT): The base recompiler lifter and runtime architecture this project builds upon.
+- Monado (XCDE): The Definitive Edition recompilation milestone that laid the foundation for Monolith Soft engine support.
+- Architectural reference and community findings from SSBU-Recomp, B2recomp, and other projects listed in [`docs/RECOMP_KNOWLEDGE.md`](docs/RECOMP_KNOWLEDGE.md).
+- Third-party components and license notices: see [`NOTICE.md`](NOTICE.md).
 
-Monado is released under the MIT License (`LICENSE`). It is an independent project, not affiliated with or endorsed by
-Nintendo or Monolith Soft. *Xenoblade Chronicles* is a trademark of Nintendo.
+XC3Recomp is released under the **MIT License** (see [`LICENSE`](LICENSE)). It is an independent open-source project, not affiliated with or endorsed by Nintendo or Monolith Soft. *Xenoblade Chronicles* is a trademark of Nintendo.

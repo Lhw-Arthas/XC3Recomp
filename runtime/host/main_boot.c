@@ -102,6 +102,10 @@ int main(int argc, char **argv) {
         extern int vk_precompile_main(const char *root);
         return vk_precompile_main(argv[2]);
     }
+    if (argc >= 2 && (!strcmp(argv[1], "--repack-spirv") || !strcmp(argv[1], "--compress-cache"))) {
+        extern int vk_pack_recompress(void);
+        return vk_pack_recompress();
+    }
 #endif
     plat_init();
     setvbuf(stderr, NULL, _IONBF, 0);

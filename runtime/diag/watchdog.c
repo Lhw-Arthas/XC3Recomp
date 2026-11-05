@@ -38,7 +38,8 @@ static DWORD WINAPI stall_main(LPVOID p) {
 }
 
 void diag_watchdog_start(void) {
-    const char *e = getenv("XCDE_STALL");
+    const char *e = getenv("XC3_STALL");
+    if (!e) e = getenv("XCDE_STALL");
     unsigned secs = e ? (unsigned)atoi(e) : 5;
     if (secs) CreateThread(NULL, 0, stall_main, (LPVOID)(uintptr_t)secs, 0, NULL);
 }

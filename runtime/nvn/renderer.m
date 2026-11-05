@@ -2612,6 +2612,7 @@ static void exec_list(uint64_t handle, int depth) {
             break;
         case CMD_DRAW_ARRAYS: draw(r, false); break;
         case CMD_DRAW_ELEMENTS: draw(r, true); break;
+        case CMD_DRAW_TRANSFORM_FEEDBACK: draw(r, false); break;
         case CMD_UPDATE_UNIFORM_BUFFER:
             // (buffer, size, offset, dataSize, data): apply the update in command order
             memcpy((void *)(uintptr_t)(r->x[0] + r->x[2]), x, r->x[3]);
@@ -2625,6 +2626,7 @@ static void exec_list(uint64_t handle, int depth) {
             if (r->x[1]) nvn_sync_set_seq(r->x[1], renderer_fence_seq());
             break;
         }
+        case CMD_WAIT_SYNC: break;
         case CMD_REPORT_COUNTER: {
             uint64_t *out = (uint64_t *)(uintptr_t)r->x[1];
             static uint32_t seen;

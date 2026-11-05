@@ -7,13 +7,16 @@
 cd "$(dirname "$0")/.."
 export PATH="/c/msys64/ucrt64/bin:$PATH"
 ROUTE=$1; SHOTS=$2; SECS=${3:-90}; NAME=${4:-drive}
+taskkill //F //IM xc3.exe >/dev/null 2>&1
 taskkill //F //IM xcde.exe >/dev/null 2>&1
+EXE="build/xc3.exe"
+[ -f "$EXE" ] || EXE="build/xcde.exe"
 XS=""
 for f in ${SHOTS//,/ }; do XS="$XS,$f:build/${NAME}_$f.png"; done
 LAST=${SHOTS##*,}
 rm -f build/${NAME}_*.png
-XCDE_INPUT_REPLAY=$ROUTE XCDE_DETERMINISTIC=1 XCDE_USAGE=build/${NAME}_usage.tsv LARECOMP_HIDDEN=1 LARECOMP_NO_AUDIO=1 \
-  XCDE_SHOTS="${XS#,}" timeout "$SECS" build/xcde.exe targets > build/$NAME.log 2>&1
+XC3_INPUT_REPLAY=$ROUTE XC3_DETERMINISTIC=1 XCDE_INPUT_REPLAY=$ROUTE XCDE_DETERMINISTIC=1 XCDE_USAGE=build/${NAME}_usage.tsv LARECOMP_HIDDEN=1 LARECOMP_NO_AUDIO=1 \
+  XC3_SHOTS="${XS#,}" XCDE_SHOTS="${XS#,}" timeout "$SECS" "$EXE" targets > build/$NAME.log 2>&1
 rc=$?
 echo "rc=$rc (124 = timeout, 127 = crash with report)"
 ls build/${NAME}_*.png 2>/dev/null

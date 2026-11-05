@@ -268,6 +268,9 @@ static void create_device(void) {
     b->fillModeNonSolid = h->fillModeNonSolid;
     b->samplerAnisotropy = h->samplerAnisotropy;
     b->textureCompressionBC = h->textureCompressionBC;
+    b->textureCompressionASTC_LDR = h->textureCompressionASTC_LDR;
+    g_vk.astc_ldr = h->textureCompressionASTC_LDR != VK_FALSE;
+    LOG("[vk] ASTC hardware decoding: %s\n", g_vk.astc_ldr ? "supported (GPU native)" : "software (CPU RGBA8)");
     b->shaderInt64 = h->shaderInt64;
     b->depthBiasClamp = h->depthBiasClamp;
     b->depthClamp = h->depthClamp;
@@ -440,10 +443,15 @@ static VkPresentModeKHR present_mode(void) {
     // 59.99x Hz monitor some frames were shown twice and others never, at a steady "60 fps" in the counters (the user:
     // feels laggy, frametime flat). FIFO shows each frame once. Above 60 / unlimited: mailbox (FIFO would cap it).
     const char *e = getenv("LARECOMP_VK_PRESENT");
+    if (!e) e = getenv("XC3_VK_PRESENT");
     bool vs = !e && g_settings.vsync && g_settings.fps > 0 && g_settings.fps <= 60 && !getenv("XCDE_FPS_PERIOD_SCALE") &&
               (!getenv("LARECOMP_HIDDEN") || getenv("XCDE_VSYNC_TEST")) && !diag_deterministic();  // (test runs: as before)
-    if (vs) e = "fifo";
-    { static int logged; if (!logged++) LOG("[vk] present mode %s%s\n", e ? e : "mailbox", vs ? " (V-Sync option)" : ""); }
+    if (!e) {
+        if (g_settings.present_mode == 1) e = "mailbox";
+        else if (g_settings.present_mode == 2 || !g_settings.vsync) e = "immediate";
+        else if (vs) e = "fifo";
+    }
+    { static int logged; if (!logged++) LOG("[vk] present mode %s%s\n", e ? e : "mailbox", (e && !strcmp(e, "fifo")) ? " (V-Sync option)" : ""); }
     VkPresentModeKHR want = !e || !strcmp(e, "mailbox") ? VK_PRESENT_MODE_MAILBOX_KHR
                           : !strcmp(e, "immediate") ? VK_PRESENT_MODE_IMMEDIATE_KHR : VK_PRESENT_MODE_FIFO_KHR;
     uint32_t n = 0;
@@ -451,8 +459,11 @@ static VkPresentModeKHR present_mode(void) {
     VkPresentModeKHR m[16];
     if (n > 16) n = 16;
     vkGetPhysicalDeviceSurfacePresentModesKHR(g_vk.phys, g_vk.surface, &n, m);
-    g_vsync_fifo = vs;
+    g_vsync_fifo = (want == VK_PRESENT_MODE_FIFO_KHR);
     for (uint32_t i = 0; i < n; i++) if (m[i] == want) return want;
+    if (want == VK_PRESENT_MODE_IMMEDIATE_KHR) {
+        for (uint32_t i = 0; i < n; i++) if (m[i] == VK_PRESENT_MODE_MAILBOX_KHR) return VK_PRESENT_MODE_MAILBOX_KHR;
+    }
     return VK_PRESENT_MODE_FIFO_KHR;
 }
 

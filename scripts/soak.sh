@@ -6,13 +6,15 @@
 cd "$(dirname "$0")/.."
 export PATH="/c/msys64/ucrt64/bin:$PATH"
 ROUTE=$1; SECS=${2:-7200}; OUT=${3:-build/soak}
-EXE=${SOAK_EXE:-build/xcde_soak.exe}; NAME=$(basename "$EXE" .exe)
+EXE=${SOAK_EXE:-${XC3_EXE:-build/xc3.exe}}
+[ -f "$EXE" ] || [ -n "$SOAK_EXE" ] || [ -n "$XC3_EXE" ] || EXE="build/xcde.exe"
+NAME=$(basename "$EXE" .exe)
 mkdir -p "$OUT"
 SD=build/save_$NAME; rm -rf "$SD"; mkdir -p "$SD"
 [ -n "$SOAK_SAVE" ] && cp -r "$SOAK_SAVE"/. "$SD"/
 export LARECOMP_SAVE_DIR=$SD LARECOMP_WINDOW=${LARECOMP_WINDOW:-1280x720} LARECOMP_HIDDEN=1 LARECOMP_NO_AUDIO=1 LARECOMP_VK_PROF=1
 for t in 1 2 3 4 5; do
-  XCDE_INPUT_REPLAY=$ROUTE "$EXE" targets > "$OUT/game.log" 2>&1 &
+  XC3_INPUT_REPLAY=$ROUTE XCDE_INPUT_REPLAY=$ROUTE "$EXE" targets > "$OUT/game.log" 2>&1 &
   PID=$!
   sleep 20
   grep -aq "not free" "$OUT/game.log" && { kill $PID 2>/dev/null; wait $PID 2>/dev/null; continue; }

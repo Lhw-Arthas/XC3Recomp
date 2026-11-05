@@ -33,17 +33,26 @@ static uint64_t src_hash(const char *src, int stage) {
 // re-reads the index tail on a miss to see the others' entries. A crash mid-append leaves unindexed bytes (ignored) or
 // a torn index entry (overwritten by the next append). Loose files are still read, and moved into the pack when hit.
 // XCDE_SPIRV_LOOSE=1: loose files only, as before.
+#include <dirent.h>
+#include <zstd.h>
 #ifdef _WIN32
 #include <io.h>
 #include <windows.h>
+#define fseek64_ _fseeki64
+#define ftell64_ _ftelli64
 #else
 #include <sys/file.h>
+#define fseek64_ fseeko
+#define ftell64_ ftello
 #endif
 #include <fcntl.h>
 #include <unistd.h>
 #ifndef O_BINARY
 #define O_BINARY 0
 #endif
+
+#define PACK_MAGIC_RAW  0x56505358u  // 'XSPV' (uncompressed)
+#define PACK_MAGIC_ZSTD 0x5650535au  // 'ZSPV' (Zstandard compressed)
 typedef struct { uint64_t hash, off; uint32_t bytes, check; } PackEntry;
 static pthread_mutex_t pack_lock = PTHREAD_MUTEX_INITIALIZER;
 static int pack_fd = -1, idx_fd = -1, pack_state;  // (state: 0 not opened, 1 open, -1 off / failed)
@@ -121,7 +130,8 @@ static void pack_refresh(void) {
 static bool pack_open(void) {
     if (pack_state) return pack_state > 0;
     pack_state = -1;
-    const char *e = getenv("XCDE_SPIRV_LOOSE");
+    const char *e = getenv("XC3_SPIRV_LOOSE");
+    if (!e) e = getenv("XCDE_SPIRV_LOOSE");
     if (e && atoi(e)) return false;
     mkdir("cache", 0755);
     pack_fd = open("cache/spirv.pack", O_RDWR | O_CREAT | O_BINARY, 0644);
@@ -185,18 +195,41 @@ static uint32_t *pack_get(uint64_t h, size_t *nwords) {
     if (!e) { pack_refresh(); e = pack_find(h); }
     PackEntry c = e ? *e : (PackEntry){0};
     pthread_mutex_unlock(&pack_lock);
-    if (!c.hash || c.bytes < 20 || c.bytes % 4 || c.off < 16) return NULL;
-    uint32_t *rec = malloc(16 + (size_t)c.bytes);
+    if (!c.hash || c.bytes < 4 || c.off < 16) return NULL;
+    uint8_t *rec = malloc(16 + (size_t)c.bytes);
     if (!rec) return NULL;
-    const uint32_t *hdr = rec, *spv = rec + 4;
-    if (pack_read(rec, 16 + (size_t)c.bytes, (int64_t)c.off - 16) != (ssize_t)(16 + c.bytes) || hdr[0] != 0x56505358u ||
-        hdr[1] != c.bytes || ((uint64_t)hdr[3] << 32 | hdr[2]) != h || spv[0] != 0x07230203) {
+    if (pack_read(rec, 16 + (size_t)c.bytes, (int64_t)c.off - 16) != (ssize_t)(16 + c.bytes)) {
         free(rec);
         return NULL;
     }
-    memmove(rec, spv, c.bytes);  // (the callers free what they get: the SPIR-V at the start of the block)
-    *nwords = c.bytes / 4;
-    return rec;
+    const uint32_t *hdr = (const uint32_t *)rec;
+    if (((uint64_t)hdr[3] << 32 | hdr[2]) != h) {
+        free(rec);
+        return NULL;
+    }
+    if (hdr[0] == PACK_MAGIC_RAW) {
+        if (hdr[1] != c.bytes || c.bytes < 20 || c.bytes % 4 != 0) { free(rec); return NULL; }
+        const uint32_t *spv = (const uint32_t *)(rec + 16);
+        if (spv[0] != 0x07230203) { free(rec); return NULL; }
+        memmove(rec, spv, c.bytes);  // (the callers free what they get: the SPIR-V at the start of the block)
+        *nwords = c.bytes / 4;
+        return (uint32_t *)rec;
+    } else if (hdr[0] == PACK_MAGIC_ZSTD) {
+        uint32_t raw_bytes = hdr[1];
+        if (raw_bytes < 20 || raw_bytes % 4 != 0) { free(rec); return NULL; }
+        uint32_t *spv = malloc(raw_bytes);
+        if (!spv) { free(rec); return NULL; }
+        size_t dsz = ZSTD_decompress(spv, raw_bytes, rec + 16, c.bytes);
+        free(rec);
+        if (ZSTD_isError(dsz) || dsz != raw_bytes || spv[0] != 0x07230203) {
+            free(spv);
+            return NULL;
+        }
+        *nwords = raw_bytes / 4;
+        return spv;
+    }
+    free(rec);
+    return NULL;
 }
 
 static bool pack_has(uint64_t h) {
@@ -214,18 +247,33 @@ static bool pack_put(uint64_t h, const uint32_t *spv, size_t nwords) {
     bool ok = pack_find(h) != NULL;
     int64_t psz = fd_size(pack_fd), isz = fd_size(idx_fd);
     if (!ok && psz >= 0 && isz >= 0) {
-        size_t bytes = nwords * 4;
-        uint8_t *rec = malloc(16 + bytes);
-        uint32_t hdr[4] = {0x56505358u, (uint32_t)bytes, (uint32_t)h, (uint32_t)(h >> 32)};
-        memcpy(rec, hdr, 16);
-        memcpy(rec + 16, spv, bytes);
-        PackEntry e = {h, (uint64_t)psz + 16, (uint32_t)bytes, 0};
-        e.check = pack_check(&e);
-        isz -= isz % (int64_t)sizeof e;  // (a torn entry from a crash is overwritten)
-        ok = pwrite64_(pack_fd, rec, 16 + bytes, psz) == (ssize_t)(16 + bytes) &&
-             pwrite64_(idx_fd, &e, sizeof e, isz) == (ssize_t)sizeof e;
-        free(rec);
-        if (ok) { pack_insert(&e); if (idx_read == isz) idx_read += sizeof e; }
+        size_t raw_bytes = nwords * 4;
+        size_t c_cap = ZSTD_compressBound(raw_bytes);
+        uint8_t *c_buf = malloc(c_cap);
+        size_t c_bytes = c_buf ? ZSTD_compress(c_buf, c_cap, spv, raw_bytes, 3) : (size_t)-1;
+        bool use_zstd = c_buf && !ZSTD_isError(c_bytes) && c_bytes < raw_bytes;
+
+        size_t payload_bytes = use_zstd ? c_bytes : raw_bytes;
+        uint32_t magic = use_zstd ? PACK_MAGIC_ZSTD : PACK_MAGIC_RAW;
+
+        uint8_t *rec = malloc(16 + payload_bytes);
+        if (rec) {
+            uint32_t hdr[4] = {magic, (uint32_t)raw_bytes, (uint32_t)h, (uint32_t)(h >> 32)};
+            memcpy(rec, hdr, 16);
+            if (use_zstd) {
+                memcpy(rec + 16, c_buf, c_bytes);
+            } else {
+                memcpy(rec + 16, spv, raw_bytes);
+            }
+            PackEntry e = {h, (uint64_t)psz + 16, (uint32_t)payload_bytes, 0};
+            e.check = pack_check(&e);
+            isz -= isz % (int64_t)sizeof e;  // (a torn entry from a crash is overwritten)
+            ok = pwrite64_(pack_fd, rec, 16 + payload_bytes, psz) == (ssize_t)(16 + payload_bytes) &&
+                 pwrite64_(idx_fd, &e, sizeof e, isz) == (ssize_t)sizeof e;
+            free(rec);
+            if (ok) { pack_insert(&e); if (idx_read == isz) idx_read += sizeof e; }
+        }
+        free(c_buf);
     }
     file_lock(idx_fd, false);
     pthread_mutex_unlock(&pack_lock);
@@ -237,7 +285,13 @@ static uint32_t *cache_load(uint64_t h, size_t *nwords) {
     uint32_t *d = pack_get(h, nwords);
     if (d) return d;
     d = loose_load(h, nwords);
-    if (d) pack_put(h, d, *nwords);  // (moved into the pack: the next start reads it from there)
+    if (d) {
+        if (pack_put(h, d, *nwords)) {
+            char path[64];
+            snprintf(path, sizeof path, "cache/spirv/%016llx.spv", (unsigned long long)h);
+            remove(path);  // (moved into the pack: free loose file)
+        }
+    }
     return d;
 }
 
@@ -269,6 +323,156 @@ static void cache_store(uint64_t h, const uint32_t *spv, size_t nwords) {
     bool ok = fwrite(spv, 4, nwords, f) == nwords;
     fclose(f);
     if (!ok || rename(tmp, path) != 0) remove(tmp);  // (another thread may have stored it first)
+}
+
+int vk_pack_recompress(void) {
+    pthread_mutex_lock(&pack_lock);
+    if (pack_fd >= 0) { close(pack_fd); pack_fd = -1; }
+    if (idx_fd >= 0) { close(idx_fd); idx_fd = -1; }
+    pack_state = 0;
+    free(pack_tab); pack_tab = NULL; pack_cap = pack_n = 0; idx_read = 0;
+
+    FILE *f_idx = fopen("cache/spirv.idx", "rb");
+    FILE *f_pack = fopen("cache/spirv.pack", "rb");
+    if (!f_idx || !f_pack) {
+        if (f_idx) fclose(f_idx);
+        if (f_pack) fclose(f_pack);
+        pthread_mutex_unlock(&pack_lock);
+        printf("[shader] no cache/spirv.pack or cache/spirv.idx found to recompress\n");
+        return 0;
+    }
+
+    fseek64_(f_idx, 0, SEEK_END);
+    long long idx_sz = ftell64_(f_idx);
+    fseek64_(f_idx, 0, SEEK_SET);
+    size_t count = (size_t)(idx_sz / sizeof(PackEntry));
+
+    PackEntry *entries = count ? malloc(count * sizeof(PackEntry)) : NULL;
+    if (!entries || fread(entries, sizeof(PackEntry), count, f_idx) != count) {
+        free(entries); fclose(f_idx); fclose(f_pack);
+        pthread_mutex_unlock(&pack_lock);
+        return 1;
+    }
+    fclose(f_idx);
+
+    size_t cap = 1024;
+    while (cap < count * 2) cap *= 2;
+    PackEntry *unique = calloc(cap, sizeof(PackEntry));
+    size_t n_unique = 0;
+    for (size_t i = 0; i < count; i++) {
+        PackEntry *e = &entries[i];
+        if (!e->hash || e->check != pack_check(e)) continue;
+        size_t slot = (size_t)(e->hash * 0x9E3779B97F4A7C15ull) & (cap - 1);
+        while (unique[slot].hash && unique[slot].hash != e->hash) slot = (slot + 1) & (cap - 1);
+        if (!unique[slot].hash) n_unique++;
+        unique[slot] = *e;
+    }
+    free(entries);
+
+    FILE *o_pack = fopen("cache/spirv.pack.tmp", "wb");
+    FILE *o_idx = fopen("cache/spirv.idx.tmp", "wb");
+    if (!o_pack || !o_idx) {
+        if (o_pack) fclose(o_pack);
+        if (o_idx) fclose(o_idx);
+        free(unique); fclose(f_pack);
+        pthread_mutex_unlock(&pack_lock);
+        return 1;
+    }
+
+    uint64_t old_total = 0, new_total = 0;
+    size_t processed = 0, recompressed = 0;
+    uint8_t *in_buf = NULL;
+    size_t in_buf_cap = 0;
+    uint8_t *c_buf = NULL;
+    size_t c_buf_cap = 0;
+
+    for (size_t i = 0; i < cap; i++) {
+        if (!unique[i].hash) continue;
+        PackEntry e = unique[i];
+        if (e.bytes + 16 > in_buf_cap) {
+            in_buf_cap = (e.bytes + 16) * 2;
+            in_buf = realloc(in_buf, in_buf_cap);
+        }
+        if (fseek64_(f_pack, (long long)e.off - 16, SEEK_SET) || fread(in_buf, 1, 16 + e.bytes, f_pack) != 16 + e.bytes)
+            continue;
+
+        uint32_t hdr[4];
+        memcpy(hdr, in_buf, 16);
+        if (((uint64_t)hdr[3] << 32 | hdr[2]) != e.hash) continue;
+
+        old_total += 16 + e.bytes;
+        uint32_t magic = hdr[0];
+        uint32_t raw_bytes = hdr[1];
+        const uint8_t *payload = in_buf + 16;
+        uint32_t payload_bytes = e.bytes;
+
+        if (magic == PACK_MAGIC_RAW) {
+            size_t need_c = ZSTD_compressBound(raw_bytes);
+            if (need_c > c_buf_cap) { c_buf_cap = need_c * 2; c_buf = realloc(c_buf, c_buf_cap); }
+            size_t c_bytes = ZSTD_compress(c_buf, need_c, payload, raw_bytes, 3);
+            if (!ZSTD_isError(c_bytes) && c_bytes < raw_bytes) {
+                magic = PACK_MAGIC_ZSTD;
+                payload = c_buf;
+                payload_bytes = (uint32_t)c_bytes;
+                recompressed++;
+            }
+        }
+
+        long long cur_off = ftell64_(o_pack);
+        uint32_t out_hdr[4] = {magic, raw_bytes, hdr[2], hdr[3]};
+        fwrite(out_hdr, 4, 4, o_pack);
+        fwrite(payload, 1, payload_bytes, o_pack);
+
+        PackEntry new_e = {e.hash, (uint64_t)cur_off + 16, payload_bytes, 0};
+        new_e.check = pack_check(&new_e);
+        fwrite(&new_e, sizeof(new_e), 1, o_idx);
+
+        new_total += 16 + payload_bytes;
+        processed++;
+    }
+
+    free(in_buf);
+    free(c_buf);
+    free(unique);
+    fclose(f_pack);
+    fclose(o_pack);
+    fclose(o_idx);
+
+    remove("cache/spirv.pack.bak");
+    remove("cache/spirv.idx.bak");
+    rename("cache/spirv.pack", "cache/spirv.pack.bak");
+    rename("cache/spirv.idx", "cache/spirv.idx.bak");
+    if (rename("cache/spirv.pack.tmp", "cache/spirv.pack") == 0 &&
+        rename("cache/spirv.idx.tmp", "cache/spirv.idx") == 0) {
+        remove("cache/spirv.pack.bak");
+        remove("cache/spirv.idx.bak");
+        printf("[shader] spirv pack recompressed: %zu shaders (%zu newly compressed with Zstd), %.1f MB -> %.1f MB (saved %.1f MB)\n",
+               processed, recompressed, old_total / 1048576.0, new_total / 1048576.0, (old_total - new_total) / 1048576.0);
+    } else {
+        rename("cache/spirv.pack.bak", "cache/spirv.pack");
+        rename("cache/spirv.idx.bak", "cache/spirv.idx");
+        fprintf(stderr, "[shader] failed to replace spirv pack files\n");
+    }
+
+    // Clean up loose files
+    DIR *dir = opendir("cache/spirv");
+    if (dir) {
+        struct dirent *de;
+        while ((de = readdir(dir))) {
+            if (de->d_name[0] == '.') continue;
+            size_t len = strlen(de->d_name);
+            if (len == 20 && !strcmp(de->d_name + 16, ".spv")) {
+                char spath[128];
+                snprintf(spath, sizeof spath, "cache/spirv/%s", de->d_name);
+                remove(spath);
+            }
+        }
+        closedir(dir);
+        rmdir("cache/spirv");
+    }
+
+    pthread_mutex_unlock(&pack_lock);
+    return 0;
 }
 
 // Vertex shaders: every float add/sub/mul/div/fma gets NoContraction, so no compiler fuses or splits them. Depth
