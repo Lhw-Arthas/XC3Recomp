@@ -2,20 +2,22 @@
 
 The plan for the native Windows port of *Xenoblade Chronicles 3* (version 2.2.0, build ID `82D187FE9EF9BE92`).
 Each phase lists what is done and what is open; update it when an item lands (commit hash) or a new one is found.
-Status as of 2026-11-04.
+Status as of 2026-11-05.
 
 ## Phase 1: Native Windows development
 
 Status: **in progress**.
 
 Done:
-- Static recompilation of `main` / `sdk` into C (`generated/`), linked into `build/xcde.exe` (`scripts/build_all.sh`).
+- Static recompilation of `main` / `sdk` into C (`generated/`), linked into `build/xc3.exe` (`scripts/build_all.sh`).
 - Kernel / HLE services, the alias region backed by a physical memory pool imported into Vulkan.
 - Vulkan renderer: Maxwell shaders translated to SPIR-V, precompiled shader cache, pipeline cache.
 - FSR 3.1 / FSR 4 in place of the game's own temporal upscale (DLSS path present, untested: AMD GPU).
 - Input (pad, keyboard, mouse), audio, movies, saves (with a backup per launch).
 - `nvnCommandBufferDrawTransformFeedback` implemented (translates captured vertices into synthesized array draws).
 - Vulkan executor: `CMD_WAIT_SYNC` (command 50) implemented with in-pass barrier flush.
+- ASTC textures decoded by a compute shader on the GPU, with the CPU decoder as fallback (`xc3.ini astc_decoder = cpu`
+  or `XC3_ASTC_CPU=1` to force it); Zstd-compressed SPIR-V cache; forced 16x anisotropic filtering (`7baedf6`).
 
 Open:
 - Black / red box by the Colony 9 waterfall: one draw (vs `61e0c6ed00`, fs `61e0c6f400`, G-buffer albedo pure red).
@@ -48,6 +50,7 @@ Open:
 - Render-thread CPU cost (~2.7 us per draw), ~800 pass splits per frame (writer draws + game barriers), ~75 hitches
   per replay (mostly loading).
 - Validate save loading and story progression; stability across areas.
+- Long sessions: pipeline libraries and driver memory grow over hours of play (README, Known issues).
 
 How it is tested: the user records a session from the launcher ("Record the session" -> `play/<timestamp>`, a save
 backup in `save/backup/`); it is replayed hidden on a scratch copy of the save (`LARECOMP_SAVE_DIR`). Replays are not
@@ -62,6 +65,8 @@ Done:
 - `tools/launcher`: graphics, upscaler, FPS, controls, button prompts, language, session recording, reports.
 - Launcher named "Xenoblade Chronicles 3" (`build/xenoblade3_launcher.exe`, `bf9de01`), dark theme, our own icon,
   optional background `mods/launcher/background.png` (`c15a3c7`).
+- Launcher options for presentation (V-Sync FIFO / Fast Sync mailbox / V-Sync off for VRR - FreeSync / G-Sync) and
+  anisotropic filtering, English launcher UI (`7baedf6`).
 - In game: cursor hidden while the window has the focus (`658faa1`); SMAA skipped while FSR / DLSS runs (`f0ad94e`).
 - `scripts/build_all.sh`: dump check, recompilation, build; shader precompilation.
 
@@ -87,8 +92,10 @@ Before publishing:
 - Check the licences of third-party code and SDKs for redistribution (`LICENSE`, `NOTICE.md`): LASRecomp / Monado,
   FidelityFX SDK, Streamline / DLSS, SDL.
 - No Nintendo / Monolith Soft assets or branding in the repository or test builds.
-- README for XC3 (today's README describes Monado / XCDE).
+- README for XC3: done (`7baedf6`); its repository layout still lists `data/variants_seed.bin`, removed in the same
+  commit. That file (27 MB) stays in the git history: include it in the audit above.
 
 Then:
 - Build and installation documentation; test builds; issue reporting and contribution guidelines
-  (`CONTRIBUTING.md` exists, written for Monado).
+  (`CONTRIBUTING.md` is titled for XC3, but its rules and test steps still describe XCDE: `games/xcde/`, `[XCDE]`
+  markers, `XCDE_*` switches).
