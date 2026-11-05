@@ -203,7 +203,7 @@ games/xc3/      Active game profile: Xenoblade Chronicles 3 (v2.2.0 build-IDs, m
 games/xcde/     Legacy game profile: Xenoblade Chronicles: Definitive Edition (selectable via XCDE_GAME=xcde)
 scripts/        Automated build, test, and run scripts (Git Bash)
 tests/          Unit tests, native C test suites, input replay tests
-data/           variants_seed.bin: Precompiled pipeline variant state keys (no game content)
+data/           variants_seed_xc3.bin: pipeline variants recorded in play (shader hashes + render state, no game content)
 docs/           Architecture notes, roadmap, research documents, and handoffs
 third_party/    Dear ImGui, SMAA, AMD FidelityFX headers, NVIDIA Streamline headers, bcdec
 ```
