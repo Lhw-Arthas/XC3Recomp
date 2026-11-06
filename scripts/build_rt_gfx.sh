@@ -16,7 +16,7 @@ CF="-O1 -march=x86_64_v2 -fno-strict-aliasing -fvisibility=hidden -Iruntime -Iru
 CF="$CF -D_FILE_OFFSET_BITS=64"
 # [XC3] the language served to the game when the player picked none: the profile's default_language (XC3: en-GB)
 lang=$(.venv/Scripts/python -c "import json,sys; print(json.load(open(sys.argv[1])).get('default_language', ''))" \
-       "games/$TARGET_GAME/profile.json" 2>/dev/null | tr -d '\r')
+       "games/${XC3_GAME:-xc3}/profile.json" 2>/dev/null | tr -d '\r')
 if [[ "$lang" =~ ^[A-Za-z-]+$ ]]; then CF="$CF -DGAME_DEFAULT_LANGUAGE=\"$lang\""; fi
 RT="loader dispatch kernel ipc fnprof platform/windows services/fs services/romfs_virtual services/am services/acc services/time
     services/hid_set services/kbicons services/misc services/audio services/hwopus hle/heaps hle/pl hle/vi hle/nvn_boot hle/fibers hle/input hle/party
