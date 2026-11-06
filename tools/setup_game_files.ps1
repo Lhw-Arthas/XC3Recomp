@@ -1,6 +1,6 @@
 # Point the project at the player's own game files (modelled on LASRecomp's start-screen game-file setup).
-# The player picks a folder; exefs (the folder with main and main.npdm) and romfs (the folder with bdat/, the game's
-# data root) are found in it or a few levels below (some layouts nest them). Game packages (.xci / .nsp / .nca / .nsz)
+# The player picks a folder; exefs (the folder with main and main.npdm) and romfs (the game's data root: XC3's has
+# bf3.arh / bf3.ard and no bdat/ folder; bdat/ is XCDE's) are found in it or a few levels below (some layouts nest them). Game packages (.xci / .nsp / .nca / .nsz)
 # are refused without being read. The version (games/<id>/profile.json: XC3 2.2.0) and the romfs contents are checked by tools/extract/check_dump.py,
 # then targets\exefs and targets\romfs are linked to the folders found (junctions: no 14 GB copy).
 #   powershell -ExecutionPolicy Bypass -File tools\setup_game_files.ps1 [folder]      exit 0 = ready
@@ -12,7 +12,7 @@ $PickHint = "Choose the folder that has the game's exefs and romfs folders in it
 function Find-Game([string]$dir, [int]$depth, [hashtable]$found) {
     if ($depth -gt 4 -or ($found.exefs -and $found.romfs)) { return }
     if (-not $found.exefs -and (Test-Path "$dir\main" -PathType Leaf) -and (Test-Path "$dir\main.npdm" -PathType Leaf)) { $found.exefs = $dir }
-    if (-not $found.romfs -and (Test-Path "$dir\bdat" -PathType Container)) { $found.romfs = $dir }
+    if (-not $found.romfs -and ((Test-Path "$dir\bf3.arh" -PathType Leaf) -or (Test-Path "$dir\bdat" -PathType Container))) { $found.romfs = $dir }
     foreach ($f in Get-ChildItem -LiteralPath $dir -File -ErrorAction SilentlyContinue) {
         if ($f.Extension -match '^\.(xci|nsp|nca|nsz|xcz)$') { $found.packages = $true }
     }
