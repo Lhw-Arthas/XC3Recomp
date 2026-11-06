@@ -425,6 +425,7 @@ void diag_usage_flush(void) {
 
 static uint64_t g_last_shot_frame;  // (the last XCDE_SHOTS frame: XCDE_EXIT_AFTER_SHOTS)
 uint64_t g_last_shot_frame_pub(void) { return g_last_shot_frame; }
+char g_tour_shot[260];  // (set by runtime/hle/party.c tour_shot)
 const char *diag_shot_path(uint64_t frame) {
     static char paths[32][160];
     static uint64_t frames[32];
@@ -445,6 +446,14 @@ const char *diag_shot_path(uint64_t frame) {
     }
     for (int i = 0; i < n; i++) if (frames[i] > g_last_shot_frame) g_last_shot_frame = frames[i];
     for (int i = 0; i < n; i++) if (frames[i] == frame) return paths[i];
+    {   // [XC3] tour captures (runtime/hle/party.c tour_shot): the next presented frame, once
+        static char tour_path[260];
+        if (frame && g_tour_shot[0]) {
+            memcpy(tour_path, g_tour_shot, sizeof tour_path);
+            g_tour_shot[0] = 0;
+            return tour_path;
+        }
+    }
     // XCDE_SHOT_EVERY=<frames>[:<dir>]: a capture of every Nth presented frame (play sessions; at most 400 files)
     static long every = -1;
     static char dir[200], path[260];
