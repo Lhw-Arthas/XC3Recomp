@@ -25,7 +25,9 @@ Done:
 Open:
 - Black / red box by the Colony 9 waterfall: one draw (vs `61e0c6ed00`, fs `61e0c6f400`, G-buffer albedo pure red).
   Not caused by the alias-region pool reads (checked with `XC3_PMM_MIRROR=1`, deterministic replay). Cause open.
-- About 17 fragment shaders failed to translate (older note, to be rechecked).
+- (Rechecked 2026-11-06: the "about 17 fragment shaders failed to translate" note is resolved - those failures, VMNMX
+  `0x3a..` / `0x3b..` and a TLD4S form, were in logs of 2026-10-28/29 before `fbf85d7`; precompilation now translates
+  all 15,170 programs, 0 failed, and no tour or replay log since then has a translation failure.)
 
 ## Phase 2: Gameplay compatibility and optimization
 
