@@ -3126,11 +3126,7 @@ static void var_load(void) {
     {   // [XCDE] T211: the shipped seed (data/variants_seed.bin: variants recorded in real play, tools/merge_variants.py):
         // a new player's first visit to an area finds them known as if seen before (prewarmed at its loading screen)
         size_t n0 = var_n;
-#ifdef GAME_XCDE
-        FILE *sf = fopen("data/variants_seed.bin", "rb");
-#else
-        FILE *sf = fopen("data/variants_seed_xc3.bin", "rb");  // [XC3] none yet (XCDE's seed only holds XCDE's shaders)
-#endif
+        FILE *sf = fopen("data/variants_seed_xc3.bin", "rb");  // [XC3] (tools/merge_variants.py)
         uint32_t hdr[2];
         if (sf && fread(hdr, 4, 2, sf) == 2 && hdr[0] == 0x56435843u && hdr[1] == (uint32_t)sizeof(Variant)) {
             Variant v;
@@ -3347,7 +3343,6 @@ void vk_prewarm_hold(uint64_t frame_draws) {
     }
     int burst = atomic_exchange(&g_reg_burst, 0);
     bool reg_hold = reg_min > 0 && burst >= reg_min && reg_ms > 0;
-#ifndef GAME_XCDE
     // [XC3] A movie's frames have few draws (25-51) and the game loads the next scene meanwhile: each frame of the
     // opening movie was held for the full 8 s on a cold cache. Nothing 3D can come out wrong under a movie: no hold.
     extern bool xcde_movie_playing(void);
@@ -3356,9 +3351,7 @@ void vk_prewarm_hold(uint64_t frame_draws) {
         if (!nl++) LOG("[prewarm] XC3: no loading hold while a movie plays\n");
         return;
     }
-#endif
     if (!max_ms || sync_shaders() || (frame_draws > (uint64_t)max_draws && !reg_hold)) return;
-#ifndef GAME_XCDE
     // [XC3] after a hold that stopped on long builds (below), the next frames go on at once while those are all that is
     // left: nothing finished and no programs registered since (one second a frame was the title screen at 1 fps)
     static int stuck_left = -1;
@@ -3368,7 +3361,6 @@ void vk_prewarm_hold(uint64_t frame_draws) {
         if (!burst && now_left >= stuck_left) return;
         stuck_left = -1;
     }
-#endif
     int lim = frame_draws > (uint64_t)max_draws && reg_ms < max_ms ? reg_ms : max_ms;
     uint64_t t0 = SDL_GetTicksNS(), dl = t0 + (uint64_t)lim * 1000000ull;
     int n0 = -1;
@@ -3379,7 +3371,6 @@ void vk_prewarm_hold(uint64_t frame_draws) {
         bool first = n0 < 0;
         if (first) n0 = left;
         bool idle = false;
-#ifndef GAME_XCDE
         // [XC3] Only while the work left goes down: a vertex shader of thousands of instructions takes AMD's compiler
         // 6-9 s, and with one of those running (or queued behind them) every hold ran to its time limit - the title
         // screen and transitions (22-27 draws) frozen 8 s a frame, 37 holds = 206 s of a 330 s cold run. Once nothing
@@ -3393,7 +3384,6 @@ void vk_prewarm_hold(uint64_t frame_draws) {
         last_left = left;
         idle = idle_ms > 0 && left && now - t_moved >= (uint64_t)idle_ms * 1000000ull;
         if (idle) stuck_left = left;
-#endif
         if (!left || idle || SDL_GetTicksNS() >= dl) {
             uint64_t ms = (SDL_GetTicksNS() - t0) / 1000000;
             static int nlog;
@@ -3987,13 +3977,8 @@ static void resolve_feedback(Prog *pr) {
 }
 
 // CMD_FENCE_SYNC: FenceSync(cmd, sync, condition, flags) is recorded from x1, so the sync is x[0] and the condition x[1].
-// [XC3] XC3 records condition 1 (the sync read as address 1 crashed it); XCDE keeps its old reading of x[1], where its
-// condition 0 meant no sync was ever marked from a command list.
-#ifdef GAME_XCDE
-#define FENCE_SYNC_ARG 1
-#else
+// [XC3] XC3 records condition 1 (the sync read as address 1 crashed it).
 #define FENCE_SYNC_ARG 0
-#endif
 
 // ================================================================== resource binding
 static VkDescriptorBufferInfo ubo_span(VkSpan s, uint64_t size) {
@@ -5555,7 +5540,6 @@ static void draw_(CmdRec *r, bool indexed) {
     { uint32_t m = (uint32_t)r->x[0]; g_draw_gs_in = m == 0 ? 1 : (m <= 3 || m == 0xa || m == 0xb) ? 2 : 3; }  // [XCDE] NVN draw mode -> GS input
     Prog *pr = get_program(st.program, &vkey, &fkey);
     uint64_t pr_max = 0;
-#ifndef GAME_XCDE
     // [XC3] the shadow pass's programs (a geometry stage: see the pipeline wait below) are not waited for either: a
     // model whose shadow program is still being built casts no shadow for those frames. A live session waited 45
     // times for them (1.0 s; new variants compiled at first use, 30-106 ms each). XC3_GS_WAIT_MS=0: wait, as before.
@@ -5564,7 +5548,6 @@ static void draw_(CmdRec *r, bool indexed) {
         if (gs_wait_ms < 0) gs_wait_ms = getenv("XC3_GS_WAIT_MS") ? atoll(getenv("XC3_GS_WAIT_MS")) : 50;
         if (gs_wait_ms > 0) pr_max = 1;
     }
-#endif
     bool pr_ok = pr && wait_ready(&pr->state, pr, pr_max);
     if (pr && g_last_wait_ns > build_wait_min()) build_wait_log(pr, NULL, g_last_wait_ns);
     if (!pr_ok) {
@@ -5808,7 +5791,6 @@ static void draw_(CmdRec *r, bool indexed) {
     }
     pp->last_used = renderer_present_count();
     uint64_t pp_max = 0;
-#ifndef GAME_XCDE
     // [XC3] Programs with a geometry stage are XC3's shadow pass (a model's vertex shader with the shared cascade
     // geometry shader): AMD's driver compiled each of these pipelines in 6-9 s at its first draw, and waiting for them
     // stopped the game for 22 s at the first battle (shader precompilation does not reach this compile). Such a draw
@@ -5819,9 +5801,7 @@ static void draw_(CmdRec *r, bool indexed) {
         if (gs_wait_ms < 0) gs_wait_ms = getenv("XC3_GS_WAIT_MS") ? atoll(getenv("XC3_GS_WAIT_MS")) : 50;
         if (gs_wait_ms > 0) pp_max = pp->gave_up ? 1 : (uint64_t)gs_wait_ms * 1000000ull;
     }
-#endif
     bool pp_ok = wait_ready(&pp->state, pp, pp_max);
-#ifndef GAME_XCDE
     if (!pp_ok && pp_max && atomic_load(&pp->state) == 0) {
         if (!pp->gave_up) {
             static int nl;
@@ -5831,7 +5811,6 @@ static void draw_(CmdRec *r, bool indexed) {
         }
         SKIPPED(); return;
     }
-#endif
     if (g_last_wait_ns > build_wait_min()) build_wait_log(NULL, pp, g_last_wait_ns);
     if ((pp->how & 0x40) && gpl_optimize_on()) { pp->how &= ~0x40; atomic_fetch_add(&pp->jobs, 1); run_job_low(gpl_optimize, pp); }  // [XCDE] T218: a prelinked pipeline's first draw
     if (!pp_ok) {

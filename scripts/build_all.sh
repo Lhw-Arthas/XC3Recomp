@@ -8,8 +8,7 @@ cd "$(dirname "$0")/.."
 step() { echo; echo "=== $* ==="; }
 [ -x .venv/Scripts/python ] || [ -f .venv/Scripts/python.exe ] || { echo "missing .venv (run \"Build XC3.bat\" or see the README)"; exit 1; }
 step "1/5 Checking the game files (targets/)"
-export XC3_GAME=${XC3_GAME:-${XCDE_GAME:-xc3}}
-export XCDE_GAME=$XC3_GAME
+export XC3_GAME=${XC3_GAME:-xc3}
 echo "game: games/$XC3_GAME"
 .venv/Scripts/python -X utf8 tools/extract/check_dump.py targets
 step "2/5 Recompiling the game code into C (generated/, ~1 min)"
@@ -21,7 +20,6 @@ scripts/build_rt_gfx.sh
 exe=${XC3_EXE:-${XCDE_EXE:-build/xc3.exe}}
 [ -f "$exe" ] || { echo "the link failed (see build/link_gfx.err)"; exit 1; }
 launcher=build/xenoblade3_launcher.exe; play="Play XC3.bat"  # [XC3] (tools/launcher/build.sh)
-[ "$XC3_GAME" = xcde ] && launcher=build/xcde_launcher.exe && play="Play Monado.bat"
 step "5/5 Building the launcher ($launcher)"
 tools/launcher/build.sh
 echo

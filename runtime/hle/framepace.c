@@ -73,9 +73,7 @@ uint64_t g_limiter_slept_ns;  // (stats)
 // its neighbours: 120 -> 10, floats 20 -> 0.5, 10 -> 5.5), and 0x70012d47b4 is 0 instead of 0x72 - both, only while
 // a cutscene runs. Changes are logged.
 bool xcde_in_cutscene(void) {
-#ifndef GAME_XCDE
     return false;  // [XC3] the addresses below are XCDE's; XC3's cutscene state is not found yet
-#endif
     // (the camera block alone dropped out for shots with a field-like camera inside a cutscene: 0x70012b9410 - 0x7203 in
     // field / menu / battle, 0x7003 for the whole Dickson scene - and 0x70012d47b4 hold through them)
     uint32_t mode = *(volatile uint32_t *)(uintptr_t)0x70012b9410ull;
@@ -116,7 +114,6 @@ int xcde_present_fps(void) { return g_cut30 ? 30 : g_settings.fps; }
 // Above 60: not supported by these (the option is 30 / 60 for XC3).
 static bool xc3_60;  // (this frame: 60 fps gameplay - xc3_ui_step)
 void xc3_fps_frame(void) {
-#ifndef GAME_XCDE
     static int on = -1;
     if (on < 0) on = g_settings.fps != 30 && !ENV("XC3_FPS_OFF");
     if (!on) return;
@@ -154,7 +151,6 @@ void xc3_fps_frame(void) {
     }
     static int logged;
     if (!logged) { logged = 1; LOG("[fps] XC3 60 fps: interval and frame time written (cutscenes at 30)\n"); }
-#endif
 }
 // [XC3] the cheat's "UI Speed Fix" (games/xc3/patches.py, main+0x67370): at 60 fps the UI layout's frame step
 // ([layout + 0x214]) stays 1/30 - its 2D animations otherwise ran twice as fast
@@ -163,9 +159,7 @@ void xc3_ui_step(uint64_t layout) {
 }
 
 static void fps_interval_force(void) {
-#ifndef GAME_XCDE
     return;  // [XC3] writes XCDE's frame interval pointer and period constant: XC3's limiter is f_700124fa34 (xc3_fps_frame)
-#endif
     static int want = -2;
     static float scale = -1;
     static uint64_t after, after_frames, frames;

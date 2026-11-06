@@ -13,7 +13,8 @@ reimplemented on top of Windows and Vulkan.
 It evolves from **Monado** (the static recompilation of *Xenoblade Chronicles: Definitive Edition*) and
 [LASRecomp](https://github.com/peiikai/LASRecomp) (MIT), adapting their generator and dedicated runtime. User-facing
 tooling and configuration are specialized for XC3 (`Build XC3.bat`, `Play XC3.bat`, `build/xenoblade3_launcher.exe`,
-`build/xc3.exe`, `xc3.ini`), while compatibility with legacy `XCDE` variables and profiles is preserved.
+`build/xc3.exe`, `xc3.ini`). XC3 is the only game built: the XCDE profile and its code paths were removed (2026-11-06);
+the `XCDE_*` environment switches and `[XCDE]` comment markers keep their names (where the code came from).
 
 > [!NOTE]
 > **No game files are included.** You need your own legally obtained copy of the game, **version 2.2.0** (the base
@@ -202,7 +203,6 @@ runtime/        Dedicated runtime: loader, kernel (SVCs, threads, sync), IPC ser
                 NVN -> Vulkan translation, Maxwell shader translator, audio/video, input, diagnostics
 tools/          Recompiler lifter (AArch64 -> C), dump extraction validator, launcher, test tooling
 games/xc3/      Active game profile: Xenoblade Chronicles 3 (v2.2.0 build-IDs, modules, patches, HLE symbols)
-games/xcde/     Legacy game profile: Xenoblade Chronicles: Definitive Edition (selectable via XCDE_GAME=xcde)
 scripts/        Automated build, test, and run scripts (Git Bash)
 tests/          Unit tests, native C test suites, input replay tests
 data/           variants_seed_xc3.bin: pipeline variants recorded in play (shader hashes + render state, no game content)

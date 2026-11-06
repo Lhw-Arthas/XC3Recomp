@@ -18,6 +18,8 @@ Done:
 - Vulkan executor: `CMD_WAIT_SYNC` (command 50) implemented with in-pass barrier flush.
 - ASTC textures decoded by a compute shader on the GPU, with the CPU decoder as fallback (`xc3.ini astc_decoder = cpu`
   or `XC3_ASTC_CPU=1` to force it); Zstd-compressed SPIR-V cache; forced 16x anisotropic filtering (`7baedf6`).
+- XC3 only: the XCDE game profile (`games/xcde/`), its `GAME_XCDE` code paths (61 blocks in the runtime and launcher) and
+  the build switch `XCDE_GAME` removed; the preprocessed XC3 code is unchanged (token for token, line numbers aside).
 - The physical memory pool is imported into Vulkan as two allocations of at most 2 GB (`a568719`). As one 3.2 GB
   allocation the AMD driver (maxMemoryAllocationSize 2 GB) accepted it, but shader reads past 2 GB faulted: GPU page
   fault, device lost (a driver timeout) on every jump into map 22. Shaders now pick the import by pool page.
@@ -119,5 +121,5 @@ Before publishing:
 
 Then:
 - Build and installation documentation; test builds; issue reporting and contribution guidelines
-  (`CONTRIBUTING.md` is titled for XC3, but its rules and test steps still describe XCDE: `games/xcde/`, `[XCDE]`
-  markers, `XCDE_*` switches).
+  (`CONTRIBUTING.md` is titled for XC3, but its test steps still describe XCDE; `[XCDE]` markers and `XCDE_*` switches
+  keep their names).

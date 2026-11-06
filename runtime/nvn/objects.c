@@ -168,7 +168,6 @@ NVN(nvnSyncWait) {  // NVN_SYNC_WAIT_RESULT_ALREADY_SIGNALED
     }
     static int whole = -1;  // LARECOMP_SYNC_ALL=1: old behaviour, wait for all submitted work
     if (whole < 0) whole = getenv("LARECOMP_SYNC_ALL") ? 1 : 0;
-#ifndef GAME_XCDE
     {   // [XC3] frame lag (launcher / F1 "Frame lag (60 FPS)": xc3.ini frame_lag, default on). The game waits at the end
         // of every frame (lr 700124fb70, next to its frame limiter f_700124fa34) for the GPU to finish that frame: CPU and
         // GPU took turns, ~5.6 ms of waiting per frame in Colony 9 (49 fps at the 60 option). It waits for the previous
@@ -191,36 +190,7 @@ NVN(nvnSyncWait) {  // NVN_SYNC_WAIT_RESULT_ALREADY_SIGNALED
             return;
         }
     }
-#endif
     if (backend_async()) { if (flush || whole) backend_drain(); else backend_wait_ticket(sync_of(A(0))->ticket); }
-#ifdef GAME_XCDE  // [XC3] keyed on the return address of XCDE's limiter
-    {   // [XCDE] perf (frame lag): the game's frame limiter (f_70005bcfe0 -> f_7000603900) waits at
-        // the end of every frame for the GPU to finish that frame: CPU and GPU take turns. With the async worker the
-        // frame's CPU-side data is captured once its jobs ran: wait for the GPU of the previous frame instead.
-        // On by default where vertex data is snapshotted at submission (the vertex cache: discrete GPUs); off on
-        // integrated GPUs (vertices read in place) and with XCDE_FRAME_LAG=0. Only above 60 fps (FPS option above 60
-        // or unlimited): the frame shown is then one frame older than the input it answers; at 30 / 60 a frame fits
-        // the period without the overlap on the PCs that have the vertex cache, and the extra frame only felt laggy.
-        static int lag = -1;
-        if (lag < 0) {
-            extern int vk_vcache_state(void);
-            const char *e = getenv("XCDE_FRAME_LAG");
-            int vc = vk_vcache_state();
-            bool high = g_settings.fps == 0 || g_settings.fps > 60 || getenv("XCDE_FPS_PERIOD_SCALE");
-            if (e) lag = atoi(e) != 0 && backend_async();
-            else if (vc >= 0) lag = vc == 1 && backend_async() && high;
-            if (lag >= 0) LOG("[nvn] frame lag %s\n", lag ? "on (one frame in flight)" : "off");
-        }
-        if (lag > 0 && c->x[30] == 0x70005bd038ull) {
-            static uint64_t prev;
-            uint64_t cur = sync_of(A(0))->seq;
-            renderer_wait_seq(prev);
-            prev = cur;
-            RET(0);
-            return;
-        }
-    }
-#endif
     if (flush) renderer_flush();
     else if (whole) renderer_sync();
     else renderer_wait_seq(sync_of(A(0))->seq);  // only the submission that holds this fence
@@ -501,13 +471,9 @@ NVN(nvnTextureInvalidateTexels) { (void)c; }
 // Texture views: GuestTextureView in the game's struct (nvn.h; XCDE: the 0x28-byte layout, XC3: 16 bytes)
 #define TV ((GuestTextureView *)AP(0))
 void nvn_view_from_guest(const void *guest, NvnTextureView *v) {
-#ifdef GAME_XCDE
-    memcpy(v, guest, sizeof *v);
-#else
     const GuestTextureView *g = guest;
     *v = (NvnTextureView){g->setmask, g->base_level, g->num_levels, g->min_layer, g->num_layers, g->format, g->target,
                           g->ds_mode, {g->swizzle[0], g->swizzle[1], g->swizzle[2], g->swizzle[3]}};
-#endif
 }
 NVN(nvnTextureViewSetDefaults) { memset(AP(0), 0, GUEST_VIEW_DEFAULTS_SIZE); }
 NVN(nvnTextureViewSetLevels) { TV->setmask |= 1; TV->base_level = (uint16_t)A(1); TV->num_levels = (uint16_t)A(2); }
@@ -628,14 +594,10 @@ NVN(nvnSamplerBuilderGetLodSnap) { RETF(0); }
 
 NVN(nvnSamplerInitialize) {
     NvnSamplerDesc *d = malloc(sizeof *d);
-#ifdef GAME_XCDE
-    *d = *(NvnSamplerDesc *)(AP(1) + 8);
-#else
     const GuestSamplerDesc *g = (const GuestSamplerDesc *)(AP(1) + 8);
     *d = (NvnSamplerDesc){g->min_filter, g->mag_filter, {g->wrap[0], g->wrap[1], g->wrap[2]}, g->compare_mode,
                           g->compare_func, g->reduction, g->lod_min, g->lod_max, g->lod_bias, g->max_aniso,
                           {g->border[0], g->border[1], g->border[2], g->border[3]}, NULL};
-#endif
     SET_HOST(A(0), d);
     RET(1);
 }
@@ -917,7 +879,6 @@ NVN(nvnWindowSetPresentInterval) {
     static int n;
     if (n++ < 20) LOG("[nvn] window present interval %d\n", (int)A(1));  // [XCDE] 60 fps work: the game's own pace
 }
-#ifndef GAME_XCDE
 // [XC3] The window crop is what the display shows of the presented texture: XC3 renders 1280x720 into its 1920x1080
 // window textures and crops to that. nvn_window_crop: the latest crop as a fraction of the window texture (x, y, w, h;
 // y from the texture's first row), false when none is set. The largest crop seen is the size the game renders for
@@ -928,12 +889,10 @@ bool nvn_window_crop(float out[4]) {
     if (g_win_crop_set) memcpy(out, g_win_crop, sizeof g_win_crop);
     return g_win_crop_set;
 }
-#endif
 
 NVN(nvnWindowSetCrop) {
     int *cr = WIN->crop;
     cr[0] = (int)A(1); cr[1] = (int)A(2); cr[2] = (int)A(3); cr[3] = (int)A(4);
-#ifndef GAME_XCDE
     NvnTexture *t0 = WIN->num ? HOST(NvnTexture, WIN->textures[0]) : NULL;
     if (!t0 || !t0->width || !t0->height || cr[2] <= 0 || cr[3] <= 0) return;
     float f[4] = {(float)cr[0] / t0->width, (float)cr[1] / t0->height, (float)cr[2] / t0->width, (float)cr[3] / t0->height};
@@ -947,7 +906,6 @@ NVN(nvnWindowSetCrop) {
         extern void output_scale_set_base(int w, int h);
         output_scale_set_base(bw, bh);
     }
-#endif
 }
 NVN(nvnWindowGetCrop) { memcpy(AP(1), WIN->crop, 16); }
 NVN(nvnWindowAcquireTexture) {

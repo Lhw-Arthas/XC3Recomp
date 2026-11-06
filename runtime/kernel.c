@@ -162,7 +162,6 @@ uint64_t kernel_heap_size(void) { return heap_size; }  // bytes from HEAP_BASE s
 // non-zero, and AllocateAddressRegion does not check it: XC3 crashed at a null region manager with 0 here.
 static uint64_t sys_resource_size;
 static uint64_t phys_mapped;  // [XC3] bytes mapped by MapPhysicalMemory (counted with the heap in GetInfo 7)
-#ifndef GAME_XCDE
 // [XC3] GetInfo 20: a page of the process the SDK writes into. nn::os::SetDyingMessageRegion (its only user in XC3's
 // sdk and main) stores the region at +0x1c0; with 0 here it wrote to address 0x1c0.
 static uint64_t user_page;  // (read and set with __atomic builtins)
@@ -175,11 +174,9 @@ static uint64_t user_page_get(void) {
     }
     return p;
 }
-#endif
 void kernel_set_system_resource_size(uint64_t size) { sys_resource_size = size; }
 
 bool g_pmem_reserved;  // [XC3] (kernel.h)
-#ifndef GAME_XCDE
 // [XC3] Physical memory pool (kernel.h, platform.h): MapPhysicalMemory takes 64 KB pool pages for the 64 KB pages of
 // the alias region it covers; a page is counted in 4 KB units (XC3 maps one 4 KB page at the region's start, the
 // rest in multiples of 64 KB) and goes back to the pool when none is left mapped.
@@ -270,9 +267,6 @@ static void pmem_unmap(uint64_t addr, uint64_t size) {
 static bool pmem_covers(uint64_t addr, uint64_t size) {
     return g_pmem_reserved && addr >= ALIAS_BASE && addr + size <= ALIAS_BASE + ALIAS_SIZE;
 }
-#else
-void *kernel_pmem(uint64_t *size, const uint32_t **ptab) { *size = 0; *ptab = NULL; return NULL; }
-#endif
 // Writable guest data regions (heap, mapped/physical memory, module .data): for debug/runtime memory scans.
 int kernel_data_regions(uint64_t *addr, uint64_t *size, int max) {
     int n = 0;
@@ -1088,11 +1082,7 @@ static void svc_impl(Cpu *c, uint32_t imm, uint64_t pc) {
         case 16: v = sys_resource_size; break;  // [XC3] system resource size (main.npdm)
         case 17: v = 0; break;                  // (its use: not tracked)
         case 18: v = 0x01006BB00C6F0000ull; break;
-#ifdef GAME_XCDE
-        case 20: v = 0; break;
-#else
         case 20: v = user_page_get(); break;  // [XC3] (see user_page)
-#endif
         default: r = R_INVALID_ENUM; LOG("[kernel] GetInfo unknown id %u/%llu\n", id0, x[3]);
         }
         x[0] = r;
@@ -1104,14 +1094,12 @@ static void svc_impl(Cpu *c, uint32_t imm, uint64_t pc) {
         // its 60 GB address region until this fails, and with no limit it committed 16 GB and filled the region table.
         // 0x10801 = kernel LimitReached (the SDK's VammManager turns it into a plain allocation failure).
         if (heap_size + phys_mapped + x[1] > 0xCD500000ull) { x[0] = 0x10801; break; }
-#ifndef GAME_XCDE
         if (pmem_covers(x[0], x[1])) {  // [XC3] pages of the physical memory pool (the GPU sees them: exec.c pmem)
             pthread_mutex_lock(&pmem_lock);
             uint32_t r = pmem_init() ? pmem_map(x[0], x[1]) : 0x10801;
             pthread_mutex_unlock(&pmem_lock);
             if (r) { x[0] = r; break; }
         }
-#endif
         region_add(x[0], x[1], 0x7, 3);  // [XC3] (commits the range: before the memset, not after)
         memset((void *)x[0], 0, x[1]);
         phys_mapped += x[1];
@@ -1121,13 +1109,11 @@ static void svc_impl(Cpu *c, uint32_t imm, uint64_t pc) {
         for (int i = 0; i < nregions; i++)  // [XC3] give the pages back to the budget (exact mappings only)
             if (regions[i].addr == x[0] && regions[i].type == 0x7) { phys_mapped -= regions[i].size; break; }
         region_remove(x[0]);
-#ifndef GAME_XCDE
         if (pmem_covers(x[0], x[1]) && pmem_view) {  // [XC3]
             pthread_mutex_lock(&pmem_lock);
             pmem_unmap(x[0], x[1]);
             pthread_mutex_unlock(&pmem_lock);
         }
-#endif
         x[0] = R_OK;
         break;
     case 0x34: x[0] = svc_wait_for_address(x[0], (uint32_t)x[1], (int32_t)x[2], (int64_t)x[3]); break;

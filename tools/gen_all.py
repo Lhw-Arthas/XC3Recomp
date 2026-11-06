@@ -1,6 +1,6 @@
 """Generate C for every module the game profile marks `lift` (T011/T013). Output: generated/<module>/*.c
 
-Usage: gen_all.py [--profile games/$XCDE_GAME/profile.json] [--exefs targets/exefs] [--out generated] [--jobs N]
+Usage: gen_all.py [--profile games/$XC3_GAME/profile.json] [--exefs targets/exefs] [--out generated] [--jobs N]
 Prints a sha256 over the generated tree (names + contents) so a run can be compared with another (NFR-006).
 """
 import argparse

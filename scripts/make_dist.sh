@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 # [XCDE] A self-contained game folder to copy to another PC (no msys64, no sources, no build objects).
 #   scripts/make_dist.sh <out dir> [--no-saves]
-# Contents: build/xcde.exe + the launcher (XC3: build/xenoblade3_launcher.exe; XCDE: build/xcde_launcher.exe) + every
+# Contents: build/xc3.exe + the launcher (build/xenoblade3_launcher.exe) + every
 # DLL they load from msys64 (copied next to them), the upscaler DLLs, targets/ (exefs + romfs), data/, mods/, the ini,
-# "Play XC3.bat" / "Play Monado.bat" (without the msys64 PATH), the
+# "Play XC3.bat" (without the msys64 PATH), the
 # portable caches (cache/spirv: SPIR-V, cache/variants.bin: the variants seen in play) and save/ (unless --no-saves).
 # Not copied: cache/vk_pipelines.bin and cache/precompile_done.txt (driver / GPU specific: the launcher precompiles
 # again on the other PC). Files already there with the same size and time are skipped (robocopy), so a second run
@@ -16,10 +16,7 @@ saves=1; [ "$2" = "--no-saves" ] && saves=0
 U=/c/msys64/ucrt64/bin
 export PATH="$U:$PATH"
 launcher=build/xenoblade3_launcher.exe; play="Play XC3.bat"  # [XC3] (tools/launcher/build.sh)
-TARGET_GAME="${XC3_GAME:-${XCDE_GAME:-xc3}}"
-[ "$TARGET_GAME" = xcde ] && launcher=build/xcde_launcher.exe && play="Play Monado.bat"
 exe=build/xc3.exe
-[ -f "$exe" ] || exe=build/xcde.exe
 mkdir -p "$out/build" "$out/cache" "$out/data"
 cp -p "$exe" "$launcher" "$out/build/"
 for d in build/*.dll; do cp -p "$d" "$out/build/"; done  # (DLSS / FSR / Reflex)
@@ -34,7 +31,6 @@ rc data "$out/data"
 [ -d cache/spirv ] && rc cache/spirv "$out/cache/spirv"
 [ -f cache/variants.bin ] && cp -p cache/variants.bin "$out/cache/"
 [ "$saves" = 1 ] && [ -d save ] && rc save "$out/save"
-[ -f xcde.ini ] && cp -p xcde.ini "$out/"
 [ -f xc3.ini ] && cp -p xc3.ini "$out/"
 sed 's|^set "PATH=C:\\msys64\\ucrt64\\bin;%PATH%"\r\?$|rem (the DLLs are in build\\)|' "$play" > "$out/$play"
 echo "dist: $out ($(ls "$out/build" | wc -l) files in build/)"

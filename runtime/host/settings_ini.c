@@ -34,11 +34,7 @@ static const char *ini_path(void) {
     const char *e = getenv("XC3_INI");
     if (!e) e = getenv("XCDE_INI");
     if (e) return e;
-#ifdef GAME_XCDE
-    return "xcde.ini";
-#else
     return "xc3.ini";
-#endif
 }
 
 static char *trim(char *s) {
@@ -128,9 +124,7 @@ void settings_load(void) {
         else bind_settings_load(k, v);
     }
     fclose(f);
-#ifndef GAME_XCDE
     g_settings.frame_lag = (g_settings.fps == 60);
-#endif
     if (g_window_w < 320) g_window_w = 320;
     if (g_window_h < 180) g_window_h = 180;
     if (g_settings.volume < 0) g_settings.volume = 0;
@@ -140,9 +134,7 @@ void settings_load(void) {
 void settings_save(void) {
     FILE *f = fopen(ini_path(), "w");
     if (!f) return;
-#ifndef GAME_XCDE
     g_settings.frame_lag = (g_settings.fps == 60);
-#endif
     static const char *res[] = {"match", "1", "2", "3", "4", "5", "6", "7", "8", "dynamic", "75%", "25%", "50%"};
     fprintf(f, "# XC3Recomp settings (the launcher writes this file)\n");
     fprintf(f, "fullscreen = %d\nwindow = %dx%d\n", g_settings.fullscreen, g_window_w, g_window_h);

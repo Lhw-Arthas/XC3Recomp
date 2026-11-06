@@ -876,7 +876,6 @@ static void ent_scan(Cpu *c, uint64_t frame) {
     LOG("[ents] f%llu: %d objects\n", (unsigned long long)frame, shown);
 }
 
-#ifndef GAME_XCDE
 // [XC3] map jumps (tour): a map change request built the way the game's own callers do (f_7000d65624 for the map
 // menu's fast travel): task 0x160 from heap 4 (f_700003d1ac / f_700003d250), f_7000d24a6c(task, request),
 // f_7000d31ec0(manager, task), queued on manager +0x50[+0x70] (f_7000e93638, count +0x10), then task vtable +0x18.
@@ -1028,17 +1027,14 @@ static void xc3_tour(Cpu *c, uint64_t frame) {
         cur++;
     }
 }
-#endif
 
 void party_game_tick(Cpu *c, uint64_t frame) {
-#ifndef GAME_XCDE
     xc3_tour(c, frame);  // (XCDE_TOUR: map jump tours)
     // [XC3] everything past here calls XCDE functions / scans for XCDE vtables. Requests from the keys are dropped
     // (party_macro_buttons stays 0, party_camera_direct false: the mouse goes through the stick conversion).
     frames30_update(frame);
     (void)c;
     return;
-#endif
     ent_scan(c, frame);
     frames30_update(frame);
     debug_fixed(c, frame);

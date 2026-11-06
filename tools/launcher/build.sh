@@ -1,25 +1,19 @@
 #!/usr/bin/env bash
 # Build the launcher: build/xenoblade3_launcher.exe (SDL3 + Dear ImGui, SDL renderer). Run it with "Play XC3.bat"
-# (XCDE: build/xcde_launcher.exe, "Play Monado.bat", XC3_GAME=xcde).
 cd "$(dirname "$0")/../.."
 Z=".venv/Scripts/python -m ziglang c++"
 I=third_party/imgui
 M=/c/msys64/ucrt64
-GF=""; OUT=build/xenoblade3_launcher.exe
-TARGET_GAME="${XC3_GAME:-${XCDE_GAME:-xc3}}"
-[ "$TARGET_GAME" = xcde ] && GF="-DGAME_XCDE" && OUT=build/xcde_launcher.exe  # [XC3] the game's launcher (name, options; tools/game.py)
+OUT=build/xenoblade3_launcher.exe
 mkdir -p build/launcher
 for f in $I/imgui.cpp $I/imgui_draw.cpp $I/imgui_tables.cpp $I/imgui_widgets.cpp $I/backends/imgui_impl_sdl3.cpp \
          $I/backends/imgui_impl_sdlrenderer3.cpp tools/launcher/launcher.cpp; do
   o=build/launcher/$(basename ${f%.cpp}).o
-  [ "$f" -nt "$o" ] || [ ! -f "$o" ] || [ "$f" = tools/launcher/launcher.cpp ] || continue  # (launcher.cpp: the game define may have changed)
-  $Z -c $f -o $o -O2 -march=x86_64_v2 -std=c++17 -I$I -I$I/backends -idirafter $M/include $GF -w || exit 1
+  [ "$f" -nt "$o" ] || [ ! -f "$o" ] || continue
+  $Z -c $f -o $o -O2 -march=x86_64_v2 -std=c++17 -I$I -I$I/backends -idirafter $M/include -w || exit 1
 done
-RES=""  # [XC3] the icon (tools/launcher/make_icon.py -> icon.ico, launcher.rc); XCDE has none
-if [ -z "$GF" ]; then
-  RES=build/launcher/launcher.res
-  .venv/Scripts/python -m ziglang rc -- tools/launcher/launcher.rc $RES || exit 1
-fi
+RES=build/launcher/launcher.res  # [XC3] the icon (tools/launcher/make_icon.py -> icon.ico, launcher.rc)
+.venv/Scripts/python -m ziglang rc -- tools/launcher/launcher.rc $RES || exit 1
 # [XC3] linked under a new name, then swapped in: Windows refuses to overwrite a running exe (the launcher rebuilding
 # itself from its "Install & build" tab, or Build XC3.bat with the launcher open) but lets it be renamed
 NEW=${OUT%.exe}.new.exe OLD=${OUT%.exe}.old.exe

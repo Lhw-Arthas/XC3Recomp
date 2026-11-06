@@ -37,9 +37,7 @@
 #include <time.h>
 #include <unistd.h>
 #include <zlib.h>
-#ifndef GAME_XCDE
 #include <zstd.h>  // [XC3] bf3.ard blocks
-#endif
 
 #include "../../rt.h"
 #include "shaders.h"
@@ -297,7 +295,6 @@ static void list_dir(const char *dir) {
 static int path_rank(const char *p) { return strstr(p, "/monolib/") ? 0 : strstr(p, ".wishp") ? 1 : 2; }
 static int path_cmp(const void *a, const void *b) { return path_rank(*(char *const *)a) - path_rank(*(char *const *)b); }
 
-#ifndef GAME_XCDE
 // [XC3] Xenoblade 3 keeps its whole RomFS in one archive, romfs/bf3.ard (the index bf3.arh is not read here): 85,105
 // xbc1 blocks (type 1 zlib, type 3 zstd), 16-byte aligned. Shaders are in three forms inside the blocks:
 //  - SPCH containers ("HCPS", as XCDE's: scan_buf), ~32,000 vertex + 32,000 fragment shaders;
@@ -438,7 +435,6 @@ static void ard_shadow_programs(void) {
     }
     printf("[precompile] %zu shadow-pass programs (geometry %016llx)%c", nprogs - n0, (unsigned long long)gs_hash, 10);
 }
-#endif
 
 // ------------------------------------------------------------------ building
 static ShaderKey vkey_guess, fkey_guess;
@@ -571,11 +567,7 @@ static _Atomic size_t next_var;
 static _Atomic uint64_t n_var_built, n_var_failed;
 static Map var_done;
 static void load_seed_file(const char *path, Map *done);
-#ifdef GAME_XCDE
-#define VARIANT_SEED "data/variants_seed.bin"
-#else
-#define VARIANT_SEED "data/variants_seed_xc3.bin"  // [XC3] none yet (XCDE's seed only holds XCDE's shaders)
-#endif
+#define VARIANT_SEED "data/variants_seed_xc3.bin"
 static void load_seed(void) {
     Map done = {0};
     load_seed_file(VARIANT_SEED, &done);
@@ -710,28 +702,20 @@ int vk_precompile_main(const char *root) {
     vkey_guess.glsl = fkey_guess.glsl = 1;
     vkey_guess.depth_minus_one = true;  // (the game's depth mode and window origin, as exec.c sets them per draw)
     bool ard = false;
-#ifndef GAME_XCDE
     {   // [XC3] the archive, not files
         char ap[1100];
         snprintf(ap, sizeof ap, "%s/bf3.ard", romfs);
         ard = ard_list(ap);
         if (ard) printf("[precompile] %s: %zu blocks%c", ap, nblocks, 10);
     }
-#endif
     if (!ard) list_dir(romfs);
     files_total = npaths;
-#ifndef GAME_XCDE
     if (ard) files_total = nblocks;
-#endif
     if (!files_total) { fprintf(stderr, "[precompile] no shader files under %s%c", romfs, 10); return 1; }
     if (!ard) qsort(paths, npaths, sizeof *paths, path_cmp);
     {   // [XC3] SPIR-V only unless XCDE_PRECOMPILE_LIBS=1: see the bf3.ard notes (the libraries took 40 min and saved nothing)
         const char *e = getenv("XCDE_PRECOMPILE_LIBS");
-#ifdef GAME_XCDE
-        use_libs = !e || atoi(e) != 0;
-#else
         use_libs = e && atoi(e) != 0;
-#endif
     }
     setenv("XCDE_PRECOMPILING", "1", 1);  // (shaders.c: no cache-miss log lines)
     setenv("LARECOMP_HIDDEN", "1", 1);
@@ -759,10 +743,8 @@ int vk_precompile_main(const char *root) {
     if (nthreads > 64) nthreads = 64;
     pthread_t th[64], sc[64];
     for (int i = 0; i < nthreads; i++) pthread_create(&th[i], NULL, worker, NULL);
-#ifndef GAME_XCDE
     if (ard) for (int i = 0; i < nthreads; i++) pthread_create(&sc[i], NULL, ard_scanner, NULL);
     else
-#endif
     for (int i = 0; i < nthreads; i++) pthread_create(&sc[i], NULL, scanner, NULL);
     while (files_done < files_total) {
         progress("scan", false);
@@ -772,9 +754,7 @@ int vk_precompile_main(const char *root) {
     for (int i = 0; i < nthreads; i++) pthread_join(sc[i], NULL);
     uint64_t t_scan = now_ns() - t0;
     pthread_mutex_lock(&flock);
-#ifndef GAME_XCDE
     if (ard) ard_shadow_programs();
-#endif
     scan_done = true;
     pthread_cond_broadcast(&fcond);
     pthread_mutex_unlock(&flock);

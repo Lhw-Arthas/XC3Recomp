@@ -88,7 +88,6 @@ static void edit_ini(File *f, const char *edits) {
 static void maybe_edit(File *f) {
     extern bool kbicons_wanted(const char *path), kbicons_init(void), settings_mod_enabled(const char *name);
     extern uint8_t *kbicons_make(const char *path, uint64_t *len);
-#ifndef GAME_XCDE
     {   // [XC3] keyboard button prompts: blocks of bf3.ard redrawn (runtime/services/kbicons.c kbicons_ard_patches)
         size_t pl = strlen(f->path);
         if (pl >= 7 && !strcmp(f->path + pl - 7, "bf3.ard")) {
@@ -109,7 +108,6 @@ static void maybe_edit(File *f) {
         }
         return;  // (lib_nx.ini and XCDE's menu files: not XC3's)
     }
-#endif
     if (kbicons_wanted(f->path)) {  // [XCDE] T234: keyboard button prompts (runtime/services/kbicons.c)
         static int loaded;
         if (!loaded++) settings_load();

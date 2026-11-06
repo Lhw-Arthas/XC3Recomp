@@ -51,13 +51,8 @@ typedef struct {
 
 // [XC3] What the HLE keeps inside the game's own NVNtextureView / NVNsamplerBuilder memory. XC3 has only 16 bytes for
 // a view (its render targets keep a texture pointer at view+0x10) and at most 0x40 for a sampler builder (one on the
-// stack has the frame record at +0x40): the same fields, narrower (tools/nvn_overlap.py found both). XCDE keeps the
-// host structs as they were. The backend always works on NvnTextureView / NvnSamplerDesc (nvn_view_from_guest).
-#ifdef GAME_XCDE
-typedef NvnTextureView GuestTextureView;
-typedef NvnSamplerDesc GuestSamplerDesc;
-#define GUEST_VIEW_DEFAULTS_SIZE 0x28
-#else
+// stack has the frame record at +0x40): the same fields, narrower (tools/nvn_overlap.py found both).
+// The backend always works on NvnTextureView / NvnSamplerDesc (nvn_view_from_guest).
 typedef struct {
     uint8_t setmask, target, ds_mode, base_level, num_levels, swizzle[4], pad;
     uint16_t format, min_layer, num_layers;
@@ -70,7 +65,6 @@ typedef struct {
 _Static_assert(sizeof(GuestTextureView) <= 16, "XC3 NVNtextureView is 16 bytes");
 _Static_assert(8 + sizeof(GuestSamplerDesc) <= 0x40, "XC3 NVNsamplerBuilder is at most 0x40 bytes");
 #define GUEST_VIEW_DEFAULTS_SIZE sizeof(GuestTextureView)
-#endif
 void nvn_view_from_guest(const void *guest, NvnTextureView *v);  // objects.c
 
 typedef struct {

@@ -11,12 +11,9 @@ Z=".venv/Scripts/python -m ziglang cc"
 # zig's wchar.h, "redefinition of _swscanf_l") and C linked against symbols zig's CRT lacks (_setjmp dllimport, fstat64i32).
 MSYS_CXX="-idirafter /c/msys64/ucrt64/include"
 CF="-O1 -march=x86_64_v2 -fno-strict-aliasing -fvisibility=hidden -Iruntime -Iruntime/nvn -Ithird_party $MSYS_CXX -w"
-# [XC3] runtime code tied to XCDE addresses / romfs content is built only for that game (tools/game.py)
-TARGET_GAME="${XC3_GAME:-${XCDE_GAME:-xc3}}"
-if [ "$TARGET_GAME" = xcde ]; then CF="$CF -DGAME_XCDE"; fi
 # [XC3] 64-bit off_t / stat (as runtime/platform/win_compat.h asks): with mingw's 32-bit ones stat() fails on files over
-# 2 GB and the virtual romfs left out XC3's 9.7 GB bf3.ard. (XCDE: unchanged; none of its files is that large.)
-if [ "$TARGET_GAME" != xcde ]; then CF="$CF -D_FILE_OFFSET_BITS=64"; fi
+# 2 GB and the virtual romfs left out XC3's 9.7 GB bf3.ard.
+CF="$CF -D_FILE_OFFSET_BITS=64"
 # [XC3] the language served to the game when the player picked none: the profile's default_language (XC3: en-GB)
 lang=$(.venv/Scripts/python -c "import json,sys; print(json.load(open(sys.argv[1])).get('default_language', ''))" \
        "games/$TARGET_GAME/profile.json" 2>/dev/null | tr -d '\r')

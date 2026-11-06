@@ -1,6 +1,6 @@
 // XC3 launcher: edits xc3.ini (graphics, scaling, controls, audio, language) and starts the game.
 // Standalone (SDL3 + Dear ImGui with the SDL renderer); the game reads the same file when its window opens
-// (runtime/host/settings_ini.c). Build: tools/launcher/build.sh. Run: "Play XC3.bat" at the repository root (XCDE: "Play Monado.bat").
+// (runtime/host/settings_ini.c). Build: tools/launcher/build.sh. Run: "Play XC3.bat" at the repository root.
 #include <SDL3/SDL.h>
 #include <SDL3/SDL_main.h>
 #include <stdarg.h>
@@ -76,17 +76,10 @@ static int key_from_ini(const char *v) {
     return strcmp(v, "none") ? SDL_GetScancodeFromName(v) : SDL_SCANCODE_UNKNOWN;
 }
 
-#ifdef GAME_XCDE
-#define APP_NAME "Monado"
-#define INI_FILE "xcde.ini"
-#define GAME_EXE "build/xcde.exe"
-#define DEF_WIN 0
-#else
 #define APP_NAME "Xenoblade Chronicles 3"  // [XC3] (window title, ini header, the big title)
 #define INI_FILE "xc3.ini"
 #define GAME_EXE "build/xc3.exe"
 #define DEF_WIN 2             // [XC3] 1920x1080: the size XC3 draws its gameplay frame at (its window crop)
-#endif
 
 struct Cfg {
     bool fullscreen = false;
@@ -143,16 +136,10 @@ static const char *const k_ups_ini[] = {"bilinear", "fsr", "fsr3", "dlss", "fsr4
 static const char *const k_uq_ini[] = {"native", "quality", "balanced", "performance", "ultra"};
 static const char *const k_wins[] = {"1280x720", "1600x900", "1920x1080", "2560x1440", "3840x2160"};
 static const char *const k_res_ini[] = {"match", "1", "2", "3", "75%", "50%", "dynamic"};
-#ifdef GAME_XCDE
-static const char *const k_res_ui[] = {"Match window (recommended)", "1x - 720p (like Switch)", "2x - 1440p",
-                                       "3x - 2160p (4K)", "75% of window", "50% of window", "Dynamic (based on performance)"};
-#define RES_HINT "The original game renders at 720p. Higher resolution = sharper image and higher GPU load."
-#else
 // [XC3] N x the frame the game draws: 1920x1080 in gameplay (Switch docked), 1280x720 on the title screen and in movies
 static const char *const k_res_ui[] = {"Match window (recommended)", "1x - 1080p (like Switch on TV)", "2x - 2160p (4K)",
                                        "3x - 3240p", "75% of window", "50% of window", "Dynamic (based on performance)"};
 #define RES_HINT "XC3 renders the game at 1080p (Switch docked). Higher resolution = sharper image and higher GPU load."
-#endif
 static const char *const k_fps_ini[] = {"30", "60", "120", "144", "165", "unlimited"};
 static const char *const k_lang_ini[] = {"auto", "en-US", "es", "fr", "de", "it", "ja"};
 static const char *const k_lang_ui[] = {"English (default)", "English", "Spanish", "French", "German", "Italian", "Japanese"};
@@ -513,9 +500,7 @@ static void load() {
         else if (!strcmp(k, "button_icons") && (i = find(k_icon_ini, 5, v)) >= 0) g.icons = i;
     }
     fclose(f);
-#ifndef GAME_XCDE
     g.frame_lag = (g.fps == 1);  // [XC3] 60 fps automatically enables frame lag
-#endif
     if (layout < 2) for (int i = 0; i < NACT; i++) g.key[i] = k_def_key[i], g.key2[i] = k_def_key2[i];
 }
 
@@ -525,10 +510,8 @@ static bool save() {
     fprintf(f, "# " APP_NAME " settings (written by the launcher)\n");
     fprintf(f, "fullscreen = %d\nwindow = %s\nresolution = %s\nupscaler = %s\nantialias = %s\nshow_fps = %d\n", g.fullscreen,
             k_wins[g.win], k_res_ini[g.res], k_ups_ini[g.upscaler], g.smaa ? "smaa" : "off", g.show_fps);
-#ifndef GAME_XCDE
     g.frame_gen = g.cut_fg = false;  // [XC3] not offered (see the upscaler options)
     g.frame_lag = (g.fps == 1);      // [XC3] 60 fps automatically enables frame lag
-#endif
     fprintf(f, "upscale_quality = %s\nframe_gen = %d\n", k_uq_ini[g.uquality], g.frame_gen);
     fprintf(f, "depth_of_field = %d\n", g.dof);
     fprintf(f, "game_blur = %d\n", g.game_blur);
@@ -695,7 +678,6 @@ static void launch() {
     si.cb = sizeof si;
     PROCESS_INFORMATION pi = {};
     std::string log = path("build/last_game.log"), rec_dir;
-#ifndef GAME_XCDE
     if (g.record) {  // [XC3] as scripts/play.sh: play/<date_time>/ with screenshots every 5 s, input.txt and game.log
         char stamp[32];
         SYSTEMTIME t;
@@ -712,7 +694,6 @@ static void launch() {
         SetEnvironmentVariableA("XCDE_INPUT_RECORD", (rec_dir + "/input.txt").c_str());
         SetEnvironmentVariableA("XCDE_STALL", "5");
     }
-#endif
     SECURITY_ATTRIBUTES sa = {sizeof sa, NULL, TRUE};
     HANDLE h = CreateFileA(log.c_str(), GENERIC_WRITE, FILE_SHARE_READ, &sa, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
     if (h != INVALID_HANDLE_VALUE) {
@@ -1099,7 +1080,6 @@ static void tab_graphics() {
     ImGui::SetNextItemWidth(360 * g_scale);
     ImGui::Combo(T("Resolución interna"), &g.res, TL(k_res_ui, 7).p, 7);
     ImGui::TextDisabled(T(RES_HINT));
-#ifndef GAME_XCDE
     // [XC3] FSR 4 too; the temporal upscalers replace the game's own (half-size) upscale, so no quality mode (the render
     // size is the game's) and no frame generation (not ported to FidelityFX SDK 2.x)
     const char *ups[] = {"Bilineal (suave)", "AMD FSR 1.0 (nítido)", "AMD FSR 3.1 (temporal, cualquier GPU)",
@@ -1120,18 +1100,6 @@ static void tab_graphics() {
                               "de la ventana). Rendimiento = la del juego original (la mitad); Nativo = la de la ventana."));
     }
     if (false) {
-#else
-    const char *ups[] = {"Bilineal (suave)", "AMD FSR 1.0 (nítido)", "AMD FSR 3.1 (temporal, cualquier GPU)",
-                         "NVIDIA DLSS (temporal, GPU RTX)"};
-    ImGui::SetNextItemWidth(320 * g_scale);
-    ImGui::Combo(T("Escalado / antialiasing"), &g.upscaler, TL(ups, 4).p, 4);
-    ImGui::SetItemTooltip(T("FSR 1.0: escalado espacial, solo cuando la resolución interna es menor que la ventana.\n"
-                          "FSR 3.1 y DLSS: reconstrucción temporal - renderizan a menos resolución (según la calidad)\n"
-                          "y reconstruyen la imagen de la ventana con varios frames: más FPS y bordes sin dientes.\n"
-                          "Sustituyen al antialiasing temporal del juego. DLSS necesita una GPU NVIDIA RTX; si no\n"
-                          "está disponible se usa FSR 3.1."));
-    if (g.upscaler >= 2) {
-#endif
         const char *uq[] = {"Nativo (solo antialiasing: DLAA / FSR Native AA)", "Calidad (67 %)", "Equilibrado (59 %)",
                             "Rendimiento (50 %)", "Ultra rendimiento (33 %)"};
         ImGui::SetNextItemWidth(320 * g_scale);
@@ -1156,15 +1124,6 @@ static void tab_graphics() {
     ImGui::Checkbox(T("Antialiasing SMAA"), &g.smaa);
     ImGui::EndDisabled();
     if (g.upscaler >= 2) ImGui::SameLine(), ImGui::TextDisabled(T("(no se usa con FSR 3.1 / FSR 4 / DLSS)"));
-#ifdef GAME_XCDE
-    ImGui::Checkbox(T("Profundidad de campo (desenfoque del juego)"), &g.dof);
-    ImGui::SetItemTooltip(T("El desenfoque de lo cercano y lo lejano que el juego aplica también en Switch.\n"
-                          "Desactivado: toda la escena nítida (y algo menos de trabajo para la GPU)."));
-    ImGui::Checkbox(T("Antialiasing y desenfoque de movimiento del juego"), &g.game_blur);
-    ImGui::SetItemTooltip(T("El antialiasing temporal (TMAA), el desenfoque de movimiento y el del pelo que el juego\n"
-                          "aplica para los 720p de la Switch: a 1080p o más suavizan toda la imagen.\n"
-                          "Desactivado: imagen nítida (combínalo con SMAA para los bordes)."));
-#endif
     ImGui::Checkbox(T("Mostrar FPS en la barra de título"), &g.show_fps);
     static const char *aniso_names[] = {"Default", "2x", "4x", "8x", "16x (Recomendado)"};
     static const int aniso_vals[] = {0, 2, 4, 8, 16};
@@ -1178,7 +1137,6 @@ static void tab_graphics() {
                           "sin costo apreciable en GPUs modernas."));
     section(T("Velocidad"));
     static const char *fps_ui[] = {"30 (como en Switch)", "60", "120", "144", "165", "Sin límite"};
-#ifndef GAME_XCDE
     // [XC3] 30 / 60 only (runtime/hle/framepace.c xc3_fps_frame: the 60 fps cheat's interval and frame time)
     if (g.fps > 1) g.fps = 1;
     if (ImGui::Combo("FPS", &g.fps, TL(fps_ui, 2).p, 2)) {
@@ -1186,12 +1144,6 @@ static void tab_graphics() {
     }
     ImGui::SetItemTooltip(T("60: el juego a 60 FPS fuera de las cinemáticas (que siguen a 30), como el parche de 60 FPS\n"
                           "de la comunidad. Necesita una GPU que lo mantenga: en zonas pesadas ayuda FSR en Rendimiento."));
-#else
-    ImGui::Combo("FPS", &g.fps, TL(fps_ui, 6).p, 6);
-    ImGui::SetItemTooltip(T("Más de 30: la velocidad del mundo, el reloj y las escenas no cambian (probado a 60 y 120);\n"
-                          "la cámara queda un poco más lejos. El V-Sync forzado en el panel de NVIDIA / AMD o el límite\n"
-                          "de RivaTuner también limitan los FPS: déjalos en 'configuración de la aplicación' / 0."));
-#endif
     static const char *vs_names[] = {"V-Sync ON (FIFO)", "Fast Sync (Mailbox)", "V-Sync OFF / VRR (Immediate)"};
     int vsi = g.present_mode >= 0 && g.present_mode <= 2 ? g.present_mode : (!g.vsync ? 2 : 0);
     ImGui::SetNextItemWidth(300 * g_scale);
@@ -1202,21 +1154,10 @@ static void tab_graphics() {
     ImGui::SetItemTooltip(T("FIFO: V-Sync clásico sin tearing, sincronizado al refresco de la pantalla.\n"
                           "Mailbox: Fast Sync / latencia mínima sin tearing.\n"
                           "Immediate: V-Sync OFF, recomendado para monitores con G-Sync / FreeSync (VRR)."));
-#ifdef GAME_XCDE
-    static const char *cut_ui[] = {"Como el resto del juego", "30 estables (como en Switch)"};
-    ImGui::SetNextItemWidth(320 * g_scale);
-    ImGui::Combo(T("Cinemáticas"), &g.cutscenes, TL(cut_ui, 2).p, 2);
-    ImGui::SetItemTooltip(T("En las cinemáticas el juego anima a los personajes a 30 aunque juegues a más FPS: con la\n"
-                          "cámara a 60 encima se notan saltos (p. ej. el pelo de Dickson).\n"
-                          "30 estables: las cinemáticas van a 30 parejos, cámara y personajes juntos (con V-Sync en un\n"
-                          "monitor de 60 Hz cada imagen dura exactamente dos refrescos).\n"
-                          "Con 'Generación de frames solo en cinemáticas' también van a 30, con generación encima."));
-#else
     section(T("Depuración"));  // [XC3]
     ImGui::Checkbox(T("Grabar la sesión (capturas, entradas y registro en play/)"), &g.record);
     ImGui::SetItemTooltip(T("Como scripts/play.sh: una captura cada 5 s, las entradas (input.txt, para repetirlas) y el registro (game.log)\n"
                           "en play/<fecha_hora>/. Envía esa carpeta si algo falla."));
-#endif
 }
 
 static void tab_controls() {
@@ -1237,29 +1178,14 @@ static void tab_controls() {
     if (npads > 0) ImGui::Text(T("   Mando conectado: %s"), SDL_GetGamepadNameForID(ids[0]));
     else ImGui::TextDisabled(T("   (ningún mando detectado)"));
     SDL_free(ids);
-#ifdef GAME_XCDE
-    ImGui::Checkbox(T("Cambiar de personaje como en Xenoblade 3 (mantén L2 y pulsa L1 / R1: el de arriba / abajo; F2)"), &g.party_switch);
-    ImGui::SetItemTooltip(T("Pasa el control al siguiente miembro del grupo, en el campo y en combate. Cada uno se queda\n"
-                          "donde está y conserva sus recargas de artes; el anterior pasa a la IA. No funciona en menús ni\n"
-                          "escenas, y en combate salta a los miembros caídos."));
-#endif
     {
         static const char *ic_ui[] = {"Automático (el mando conectado; sin mando, teclado)", "Switch", "Xbox", "PlayStation",
                                       "Teclado (las teclas asignadas)"};
         ImGui::SetNextItemWidth(340 * g_scale);
         ImGui::Combo(T("Iconos de botones"), &g.icons, TL(ic_ui, 5).p, 5);
-#ifdef GAME_XCDE
-        int ic = icons_effective(g.icons);
-        if ((ic == 2 || ic == 3) && !exists((std::string("mods/") + k_icon_mod[ic - 2] + "/romfs").c_str()))  // (4: keyboard, no pack)
-            ImGui::TextColored(ImVec4(1, 0.6f, 0.2f, 1), T("Falta el pack: descarga \"%s\" de GameBanana y pon su carpeta romfs en mods\\%s"),
-                               ic == 2 ? "Xbox control layout" : "PS5 DualSense control layout", k_icon_mod[ic - 2]);
-        ImGui::SetItemTooltip(T("Xbox / PlayStation: packs de iconos de CompC (GameBanana). Teclado: el juego dibuja en cada\n"
-                              "icono la tecla asignada a ese botón (también ratón). Se aplica al iniciar el juego."));
-#else
         // [XC3] all styles drawn by the game itself (runtime/services/kbicons.c, texpatch.c): no packs needed
         ImGui::SetItemTooltip(T("Los iconos de los botones del juego: Xbox (A B X Y, LB RB LT RT), PlayStation (símbolos,\n"
                               "L1 R1 L2 R2) o las teclas asignadas, según los controles. Se aplica al iniciar el juego."));
-#endif
     }
     {
         static const char *ml_ui[] = {"No", "Manteniendo el botón derecho", "Siempre"};
@@ -1368,11 +1294,7 @@ static void make_report() {
     char stamp[32];
     time_t now = time(NULL);
     strftime(stamp, sizeof stamp, "%Y%m%d_%H%M%S", localtime(&now));
-#ifdef GAME_XCDE
-    std::string zip = std::string("reports/xcde_report_") + stamp + ".zip";
-#else
     std::string zip = std::string("reports/xc3_report_") + stamp + ".zip";
-#endif
     char sys[MAX_PATH];
     GetSystemDirectoryA(sys, sizeof sys);
     std::string tar = std::string(sys) + "\\tar.exe";
@@ -1474,10 +1396,8 @@ int main(int argc, char **argv) {
     g_llog = fopen((g_root + "\\build\\launcher.log").c_str(), "w");
     SetUnhandledExceptionFilter(crash_filter);
     llog("launcher start, root %s", g_root.c_str());
-#ifndef GAME_XCDE
     SDL_SetHint(SDL_HINT_WINDOWS_INTRESOURCE_ICON, "1");  // [XC3] the window's icon: resource 1 (launcher.rc)
     SDL_SetHint(SDL_HINT_WINDOWS_INTRESOURCE_ICON_SMALL, "1");
-#endif
     if (!SDL_Init(SDL_INIT_VIDEO | SDL_INIT_GAMEPAD)) {
         llog("SDL_Init with gamepads failed (%s): video only", SDL_GetError());
         if (!SDL_Init(SDL_INIT_VIDEO)) return fail("Could not start SDL (video).");
@@ -1547,11 +1467,7 @@ int main(int argc, char **argv) {
         ImGui::SetNextWindowSize(vp->WorkSize);
         ImGui::Begin("main", NULL, ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoSavedSettings);
         if (g_font_title) ImGui::PushFont(g_font_title);
-#ifdef GAME_XCDE
-        ImGui::TextColored(pal::accent, "Xenoblade Chronicles: Definitive Edition");
-#else
         ImGui::TextColored(pal::accent, APP_NAME);  // [XC3]
-#endif
         if (g_font_title) ImGui::PopFont();
         ImGui::TextDisabled("%s", T("Recompilación nativa para PC · configuración"));
         ImGui::Dummy(ImVec2(0, 4 * scale));
@@ -1565,11 +1481,7 @@ int main(int argc, char **argv) {
             if (ImGui::BeginTabItem(T("Controles"), NULL, f1)) { tab_controls(); ImGui::EndTabItem(); }
             if (ImGui::BeginTabItem(T("Audio e idioma"), NULL, f2)) { tab_audio(); ImGui::EndTabItem(); }
             ImGuiTabItemFlags f3 = shot && shot_tab == 3 ? ImGuiTabItemFlags_SetSelected : 0;
-#ifdef GAME_XCDE
-            if (ImGui::BeginTabItem(T("Mods"), NULL, f3)) { tab_mods(); ImGui::EndTabItem(); }
-#else
             if (ImGui::BeginTabItem(T("Instalación y build"), NULL, f3)) { tab_build(); ImGui::EndTabItem(); }  // [XC3]
-#endif
             ImGui::EndTabBar();
         }
         ImGui::EndChild();

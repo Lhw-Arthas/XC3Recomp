@@ -46,13 +46,11 @@ static void rtld_fini_all(Cpu *c) { (void)c; LOG("[boot] nnMain returned (module
 
 __attribute__((constructor(101))) static void reserve_guest_space(void) {
     uint64_t lo = GUEST_LO;
-#ifndef GAME_XCDE
     // [XC3] (ALIAS_BASE == GUEST_LO) its own reservation, the rest of the window after it as before
     if (!getenv("XC3_NO_PMEM") && plat_pmem_reserve(ALIAS_BASE, ALIAS_BASE + ALIAS_SIZE)) {
         g_pmem_reserved = true;
         lo = ALIAS_BASE + ALIAS_SIZE;
     }
-#endif
     if (!plat_reserve_guest(lo, GUEST_HI)) {
         // [XCDE] T135: something the loader placed at random (ASLR) sits in the guest range in ~1 of 5 starts. A new
         // process gets a new layout: start this one again (same command line, same console), up to 8 times.

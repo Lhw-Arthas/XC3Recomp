@@ -32,11 +32,7 @@ static volatile float cur_fps;
 static volatile bool want_title;
 static bool title_has_fps;
 
-#ifdef GAME_XCDE
-#define WIN_TITLE "Xenoblade Chronicles: Definitive Edition (Recomp)"
-#else
 #define WIN_TITLE "Xenoblade Chronicles 3 (Recomp)"
-#endif
 
 static bool is_input(Uint32 t) {
     switch (t) {
@@ -189,19 +185,10 @@ static void feed(ImGuiIO &io, uint32_t w, uint32_t h) {
     }
 }
 
-#ifdef GAME_XCDE
-#define INI_FILE "xcde.ini"
-#else
 #define INI_FILE "xc3.ini"
-#endif
 
-#ifdef GAME_XCDE
-static const char *const k_res_ui[] = {"Match window (recommended)", "1x - 720p (like Switch)", "2x - 1440p", "3x - 2160p",
-                                       "75% of window", "50% of window", "Dynamic (holds 60 FPS)"};
-#else
 static const char *const k_res_ui[] = {"Match window (recommended)", "1x - 1080p (like Switch on TV)", "2x - 2160p (4K)", "3x - 3240p",
                                        "75% of window", "50% of window", "Dynamic (holds 60 FPS)"};
-#endif
 static const int k_res_mode[] = {RES_MATCH, 1, 2, 3, RES_Q75, RES_Q50, RES_DYNAMIC};
 
 static void ui(void) {

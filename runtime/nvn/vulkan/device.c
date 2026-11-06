@@ -492,13 +492,9 @@ float vk_display_hz(void) {
 
 static int repeat_presents(void) {
     static int off = -1;
-#ifdef GAME_XCDE
-    if (off < 0) off = getenv("XCDE_REPEAT_PRESENT") && atoi(getenv("XCDE_REPEAT_PRESENT")) == 0;
-#else
     // [XC3] Do not repeat-present by default: on high-refresh displays (e.g. 180 Hz at 30 fps -> 6 presents/frame)
     // queueing 6 FIFO presents into a 3-image swapchain blocks the render worker for ~21 ms every frame.
     if (off < 0) off = !getenv("XCDE_REPEAT_PRESENT") || atoi(getenv("XCDE_REPEAT_PRESENT")) == 0;
-#endif
     extern bool tmp_fg_active(void);
     extern int xcde_present_fps(void);  // (FPS setting, or 30 while a cutscene is held at 30: framepace.c)
     int fps = xcde_present_fps();
@@ -1152,7 +1148,6 @@ void backend_present(NvnTexture *t) {
         // interiors / dungeons: their 16:9 centre, or the part inside a room wider than one screen
         extern void widescreen_present_crop(uint64_t, double, float *, double *, double *, double *, double *);
         widescreen_present_crop(total_frames, shape, crop, &vx, &vy, &vw, &vh);
-#ifndef GAME_XCDE
         {   // [XC3] only the game's window crop is shown (objects.c nvn_window_crop), the widescreen crop inside it
             extern bool nvn_window_crop(float out[4]);
             float wc[4];
@@ -1164,7 +1159,6 @@ void backend_present(NvnTexture *t) {
                 crop[3] *= wc[3];
             }
         }
-#endif
         widescreen_set_factor((float)shape);
         renderer_set_scale((float)sx, (float)sy);
         memcpy(g_shot_crop, crop, sizeof crop);
@@ -1371,11 +1365,7 @@ void ui_window_init(void) {
                                             getenv("LARECOMP_HOST_INPUT") || getenv("LARECOMP_BIND_TEST"));
         if (scripted) SDL_SetHint(SDL_HINT_WINDOW_ACTIVATE_WHEN_SHOWN, "0");
     }
-#ifdef GAME_XCDE
-    window = SDL_CreateWindow("Xenoblade Chronicles: Definitive Edition (Recomp)", win_w, win_h, wflags);
-#else
     window = SDL_CreateWindow("Xenoblade Chronicles 3 (Recomp)", win_w, win_h, wflags);  // [XC3]
-#endif
     if (!window) FATAL("SDL_CreateWindow: %s\n", SDL_GetError());
     rt_window_icon(window);
     // the Fullscreen setting applies from the start screen on (not only once the game runs); test windows stay windows

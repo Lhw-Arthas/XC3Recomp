@@ -1,8 +1,8 @@
-"""The game being built: games/<id>/, chosen by XC3_GAME / XCDE_GAME (default xc3)."""
+"""The game being built: games/<id>/, chosen by XC3_GAME (default xc3; games/xc3 is the only one)."""
 import os
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-GAME = os.environ.get('XC3_GAME', os.environ.get('XCDE_GAME', 'xc3'))
+GAME = os.environ.get('XC3_GAME', 'xc3')
 
 
 def path(*parts):
