@@ -1054,6 +1054,56 @@ static bool wait_ready(_Atomic int *state, void *arg, uint64_t max_ns) {
     return atomic_load(state) == 1;
 }
 
+// [XC3] Frame wait budget for pipelines of new shaders. A draw whose program was new to this PC (a state combination
+// neither the seed nor cache/variants.bin had: its SPIR-V compiled at first use, Prog.spv_new) waited for its pipeline
+// libraries, which AMD's driver then compiles from scratch (its cache is keyed by the SPIR-V): 280-731 ms on one frame
+// (map 20 tour, 2026-11-06). Such draws now wait at most XC3_FRAME_WAIT_MS (default 25; 0: no limit, as before) in all
+// per frame; past it a draw is skipped until its pipeline is built (a few frames of pop-in instead of a freeze), and
+// later draws of that pipeline don't wait for it either (gave_up). The job is moved to the head of the workers' queue
+// so the wait can end on time. Every other build is waited for as before (wait_ready, run here on the render thread):
+// with the budget on all of them, the warm-cache links and library loads (0.1-11 ms) of the first frames after an
+// area change used it up and 529-947 draws were skipped per map 20 tour instead of 127, with no shorter hitches.
+static uint64_t frame_wait_budget(void) {
+    static int64_t v = -1;
+    if (v < 0) { const char *e = getenv("XC3_FRAME_WAIT_MS"); v = (int64_t)((e ? atof(e) : 25.0) * 1e6); if (v < 0) v = 0; }
+    return (uint64_t)v;
+}
+uint64_t renderer_present_count(void);
+static uint64_t fw_frame = ~0ull, fw_spent;  // (render thread) the frame the budget is for, ns waited in it
+// The job for arg (if still queued) moved to the head of its queue.
+static void promote_job(Job **head, Job **tail, pthread_mutex_t *lk, void *arg) {
+    pthread_mutex_lock(lk);
+    Job *prev = NULL, *j = *head;
+    while (j && j->arg != arg) prev = j, j = j->next;
+    if (j && prev) {
+        prev->next = j->next;
+        if (*tail == j) *tail = prev;
+        j->next = *head;
+        *head = j;
+    }
+    pthread_mutex_unlock(lk);
+}
+static bool wait_budget(_Atomic int *state, void *arg) {
+    g_last_wait_ns = 0;
+    if (atomic_load(state) != 0) return atomic_load(state) == 1;
+    uint64_t f = renderer_present_count(), budget = frame_wait_budget();
+    if (f != fw_frame) fw_frame = f, fw_spent = 0;
+    uint64_t t0 = SDL_GetTicksNS();
+    const char *was = g_rq_where;
+    vk_rq_at("waiting for a shader / pipeline build");
+    while (atomic_load(state) == 0) {
+        promote_job(&jobs_head, &jobs_tail, &jobs_lock, arg);
+        if (fw_spent + (SDL_GetTicksNS() - t0) >= budget) break;
+        if (pw_npending || pl_npending || lv_npending) prewarm_pump();
+        sched_yield();
+    }
+    if (tl_rq_worker) g_rq_where = was;
+    g_last_wait_ns = SDL_GetTicksNS() - t0;
+    fw_spent += g_last_wait_ns;
+    if (g_last_wait_ns > 1000) { stat_build_waits++; stat_build_wait_ns += g_last_wait_ns; hc_wait_ns += g_last_wait_ns; hc_wait_n++; }
+    return atomic_load(state) == 1;
+}
+
 // ================================================================== state
 typedef struct {
     NvnTexture *color[8];
@@ -5784,6 +5834,7 @@ static void draw_(CmdRec *r, bool indexed) {
     }
     else if (atomic_load(&pp->state) == 3) {  // [XCDE] evicted (pipe_evict): built again, from the warm caches
         pp->how &= 0x80;
+        pp->gave_up = 0;  // [XC3] (wait_budget / the shadow wait: a rebuild is waited for again)
         atomic_store(&pp->state, 0);
         atomic_fetch_add(&pp->jobs, 1);
         run_job(build_pipeline, pp);
@@ -5801,7 +5852,18 @@ static void draw_(CmdRec *r, bool indexed) {
         if (gs_wait_ms < 0) gs_wait_ms = getenv("XC3_GS_WAIT_MS") ? atoll(getenv("XC3_GS_WAIT_MS")) : 50;
         if (gs_wait_ms > 0) pp_max = pp->gave_up ? 1 : (uint64_t)gs_wait_ms * 1000000ull;
     }
-    bool pp_ok = wait_ready(&pp->state, pp, pp_max);
+    bool pp_ok;
+    // [XC3] frame wait budget (wait_budget): a new shader's pipeline whose libraries aren't built yet
+    if (!pp_max && frame_wait_budget() && pp->k.prog->spv_new && atomic_load(&pp->state) == 0 &&
+        !(g_vk.gpl && gpl_ready(gpl_key_pre(&pp->k)) && (!pp->k.prog->fs || gpl_ready(gpl_key_fs(&pp->k))))) {
+        pp_ok = pp->gave_up ? wait_ready(&pp->state, pp, 1) : wait_budget(&pp->state, pp);
+        if (!pp_ok && !pp->gave_up && atomic_load(&pp->state) == 0) {
+            pp->gave_up = 1;
+            static int nl;
+            if (nl++ < 100) LOG("[vk] frame wait budget spent: pipeline drawn once built (vs %llx fs %llx, waited %.1f ms)%c",
+                                (unsigned long long)pp->k.prog->code[0], (unsigned long long)pp->k.prog->code[1], g_last_wait_ns / 1e6, 10);
+        }
+    } else pp_ok = wait_ready(&pp->state, pp, pp_max);
     if (!pp_ok && pp_max && atomic_load(&pp->state) == 0) {
         if (!pp->gave_up) {
             static int nl;

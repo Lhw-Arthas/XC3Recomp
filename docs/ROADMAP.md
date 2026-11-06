@@ -47,8 +47,18 @@ Done:
   Loading-frame holds (frames of 0-45 draws held for the build work) checked on a recording: the long ones are the
   loading screens (by design: the next area starts with its shaders built), menus hold 1-13 ms - left as they are.
   A 4.5 min session with menus and travel after these fixes: 8 gameplay hitches, 34-51 ms.
-  Still open: pipeline libraries built by AMD's driver at first use (8-10 ms); program builds waiting 8-14 ms on a
-  translation lock ("lock" in [build-wait]).
+  Still open: program builds waiting 8-14 ms on a translation lock ("lock" in [build-wait]).
+- Pipeline waits measured again (map 20 tour twice, 2026-11-06): with warm caches only 3 waits over 4 ms (24 ms in
+  all), so AMD's driver cache does serve the pipeline libraries. The big ones (280-731 ms on one frame) are programs new
+  to the PC (`[variant-miss]`: SPIR-V compiled at first use, then libraries compiled from scratch by the driver).
+  Frame wait budget for those pipelines only: at most `XC3_FRAME_WAIT_MS` (default 25, 0 = off) per frame, then the
+  draw is skipped until its pipeline is built. Warm tour: 132 draws skipped vs 127 before, budget never spent. Not
+  measured on a cold driver cache (the case it is for) - live play shows `[vk] frame wait budget spent` when it acts.
+  Tried and not kept: the budget on every wait (529-947 draws skipped per tour, hitches no shorter), `XCDE_PRELINK=1`
+  at 16 GB (no change), `LARECOMP_ASYNC_SKIP=1` (8,560 draws skipped). `XCDE_LIB_BUDGET=12000` at 16 GB: no library
+  eviction, draw waits in hitch frames 249 -> 158 ms - memory cost not measured yet.
+  The remaining 70-106 ms hitches after an area change wait for no build (30-165 MB uploads in those frames): cause
+  not examined.
 - Frame lag at the 60 option (launcher / F1 "Frame lag (60 FPS)", `xc3.ini frame_lag`, default on): one frame in
   flight instead of CPU and GPU taking turns; Colony 9 replay 52 -> 60 fps, ~10 min of live play without issues.
 - SPIR-V cache index that outlived its pack: entries pointing past the pack are stored again instead of compiled
