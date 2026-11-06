@@ -55,12 +55,14 @@ Done:
   and `jumppos`, run in hidden batches by `tools/xc3_tour.py` (scratch save, per-point summary, captures). The jump
   list (`build/tours/xc3_jumps.txt`, from the game's own jump point table) is generated locally and never committed.
   First full run: maps 18-21 and the start of 22 reached without a crash (850 points); it found the map 22 GPU fault
-  above. Resumed after the fix: map 22 complete, the remaining maps in progress.
+  above. Resumed after the fix (527 points, maps 22-30, 14 runs): every point reached, no crash, no device lost.
+  Frames over 1 s at 16 points (11 in map 22, worst 2.5 s; 3 in map 25; 1 each in maps 27 and 29), median 41-85 ms
+  per map (map 29: 408 ms).
 
 Open:
 - Test beyond the title screen, opening and Colony 9: Everblight canyon, battles, long cutscenes, other regions.
   The tour covers loading and rendering of each jump point, not battles, cutscenes or story progress.
-- Tour follow-ups: finish maps 23 and up; the worst first-visit hitches (up to 6.5 s in map 20 on a fresh cache);
+- Tour follow-ups: the worst first-visit hitches (up to 6.5 s in map 20 on a fresh cache, 2.5 s in map 22);
   feed the variants the tour records into the seed so precompilation covers those areas; jump points of maps 0, 1
   and 17 land in a dark scene (not field maps, probably).
 - Render-thread CPU cost (~2.7 us per draw), ~800 pass splits per frame (writer draws + game barriers), ~75 hitches
