@@ -28,6 +28,7 @@ Every edit to a copied file is marked `[XCDE]` (the project's working name) and 
 | Dear ImGui | MIT (`third_party/imgui/LICENSE.txt`) |
 | SMAA (reference shader and lookup textures) | MIT-style (`third_party/smaa/LICENSE.txt`) |
 | AMD FidelityFX API headers (FSR 3.1 / frame generation) | MIT |
+| AMD FidelityFX SDK 2.4.0 signed DLLs (`amd_fidelityfx_loader_vk.dll`, `amd_fidelityfx_upscaler_vk.dll`: FSR 3.1 / FSR 4) | MIT (`third_party/fidelityfx/license.md`) |
 | NVIDIA Streamline headers (DLSS) | MIT (`third_party/streamline/license.txt`) |
 | bcdec (BC texture decoding) | MIT or public domain (Unlicense), at the user's choice |
 
@@ -46,6 +47,6 @@ Every edit to a copied file is marked `[XCDE]` (the project's working name) and 
 
 | Component | Use |
 |---|---|
-| AMD FidelityFX SDK 1.1.4 signed DLL (`amd_fidelityfx_vk.dll`) | FSR 3.1 upscaling and frame generation |
+| AMD FidelityFX SDK 1.1.4 signed DLL (`amd_fidelityfx_vk.dll`) | older FSR 3.1 + frame generation (fallback; the 2.4.0 DLLs above are preferred) |
 | NVIDIA Streamline 2.14.16 + DLSS DLLs | DLSS |
 | Button icon packs from GameBanana (CompC: "Xbox control layout", "PS5 DualSense control layout", CC BY-NC-ND) | controller prompts; installed by the user into `mods/` |

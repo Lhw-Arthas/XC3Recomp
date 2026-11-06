@@ -150,7 +150,7 @@ When finished, launch the game with `Play XC3.bat`. On the first launch, click *
    scripts/build_rt_gfx.sh                       # Runtime + Vulkan renderer -> build/xc3.exe
    tools/launcher/build.sh                       # Launcher -> build/xenoblade3_launcher.exe
    ```
-5. **Optional upscaler DLLs:** FSR 3.1 and DLSS require vendor DLLs that are not redistributed here (AMD FidelityFX SDK 1.1.4 and NVIDIA Streamline 2.14.16). Place them using `scripts/copy_upscaler_dlls.sh`.
+5. **Upscaler DLLs:** FSR 3.1 / FSR 4 use AMD's signed FidelityFX SDK 2.4.0 DLLs, included in `third_party/fidelityfx/` (MIT) and copied next to the exe by `scripts/copy_upscaler_dlls.sh` (`build_all.sh` runs it). DLSS needs NVIDIA Streamline 2.14.16, not redistributed here: put it in `sdk/` and run the same script.
 6. **Launch:** Run `Play XC3.bat` or start `build/xenoblade3_launcher.exe`.
 
 ## Settings
