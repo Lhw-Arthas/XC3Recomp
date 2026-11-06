@@ -78,6 +78,7 @@ def main():
     ap.add_argument('--out', default=None, help='default: build/tour_runs/<date_time>')
     ap.add_argument('--shots', action='store_true', help='a capture after each jump (XCDE_TOUR_SHOT_AUTO)')
     ap.add_argument('--env', action='append', default=[], help='extra NAME=VALUE for the game (repeatable)')
+    ap.add_argument('--timeout', type=float, default=0, help='seconds per run (default: from the steps; more after a shader change)')
     a = ap.parse_args()
 
     save = a.save or save_for(a.replay)
@@ -116,7 +117,7 @@ def main():
             env[k] = v
         env['PATH'] = 'C:\\msys64\\ucrt64\\bin;' + env.get('PATH', '')
         # (wall clock: the replay ~70 s, then each jump's frames at >= ~20 fps plus a cold load)
-        limit = 180 + len(steps) * (a.wait / 20 + 20)
+        limit = a.timeout or 180 + len(steps) * (a.wait / 20 + 20)
         log_path = os.path.join(work, 'game.log')
         t0 = time.time()
         with open(log_path, 'w', encoding='utf-8') as log:

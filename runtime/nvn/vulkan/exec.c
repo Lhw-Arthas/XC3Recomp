@@ -4165,11 +4165,16 @@ static VkDescriptorBufferInfo gmem_info(void) {
 // buffers in the alias region (nn::os VammManager pages, MapPhysicalMemory), and shader global memory there
 // (translate.c, maxwell_pmem_base) looks the page up in the table and uses the pool. Without the import (or before the
 // first MapPhysicalMemory) the table bound is all zero: those accesses read zero, as before.
+// Two imports: pool pages [0, PMEM_LO_PAGES) in pmem_buf, the rest in pmemh_buf (shader.h PMEM_HI_BUFFER_INDEX). One
+// allocation of the whole pool (3.2 GB) was accepted by the AMD driver (maxMemoryAllocationSize 2 GB), but the GPU
+// faulted on its pages past 2 GB ("GPU page fault ... read invalid", device lost: every jump into map 22, whose data
+// landed there). pool_buf() gives the import holding a pool byte offset and the offset in it.
 #define PTAB_BYTES (ALIAS_SIZE / PLAT_PMEM_PAGE * 4)
-static VkBuffer pmem_buf, ptab_buf, pzero_buf;
-static VkDeviceMemory pmem_mem, ptab_mem;
+#define PMEM_LO_BYTES ((uint64_t)PMEM_LO_PAGES * PLAT_PMEM_PAGE)
+static VkBuffer pmem_buf, pmemh_buf, ptab_buf, pzero_buf;
+static VkDeviceMemory pmem_mem, pmemh_mem, ptab_mem;
 static VmaAllocation pzero_mem;
-static uint64_t pmem_bytes;
+static uint64_t pmem_bytes, pmemh_bytes;
 
 static void pmem_import(void) {
     static int done;
@@ -4179,18 +4184,35 @@ static void pmem_import(void) {
     void *view = kernel_pmem(&size, &ptab);
     if (!view) return;
     done = 1;
-    if (host_import(view, size, &pmem_buf, &pmem_mem) && host_import(ptab, PTAB_BYTES, &ptab_buf, &ptab_mem)) {
-        pmem_bytes = size;
-        LOG("[vk] physical memory pool imported for shader global memory: %llu MB\n", (unsigned long long)(size >> 20));
+    uint64_t lo = size < PMEM_LO_BYTES ? size : PMEM_LO_BYTES, hi = size - lo;
+    if (host_import(view, lo, &pmem_buf, &pmem_mem) && (!hi || host_import((uint8_t *)view + lo, hi, &pmemh_buf, &pmemh_mem)) &&
+        host_import(ptab, PTAB_BYTES, &ptab_buf, &ptab_mem)) {
+        pmem_bytes = lo, pmemh_bytes = hi;
+        LOG("[vk] physical memory pool imported for shader global memory: %llu MB (%llu + %llu MB)\n", (unsigned long long)(size >> 20),
+            (unsigned long long)(lo >> 20), (unsigned long long)(hi >> 20));
         return;
     }
     LOG("[vk] physical memory pool import failed (%llu MB): shader global memory there reads zero\n", (unsigned long long)(size >> 20));
     if (pmem_buf) { vkDestroyBuffer(g_vk.dev, pmem_buf, NULL); vkFreeMemory(g_vk.dev, pmem_mem, NULL); pmem_buf = VK_NULL_HANDLE; }
+    if (pmemh_buf) { vkDestroyBuffer(g_vk.dev, pmemh_buf, NULL); vkFreeMemory(g_vk.dev, pmemh_mem, NULL); pmemh_buf = VK_NULL_HANDLE; }
+}
+
+// the import holding pool byte offset `off` and the offset in it; *left: bytes from there to that import's end
+static VkBuffer pool_buf(uint64_t off, VkDeviceSize *in, uint64_t *left) {
+    if (off < PMEM_LO_BYTES) { *in = off; if (left) *left = pmem_bytes - off; return pmem_buf; }
+    *in = off - PMEM_LO_BYTES;
+    if (left) *left = pmemh_bytes > *in ? pmemh_bytes - *in : 0;
+    return pmemh_buf;
 }
 
 static VkDescriptorBufferInfo pmem_info(void) {
     pmem_import();
     return ptab_buf ? (VkDescriptorBufferInfo){pmem_buf, 0, pmem_bytes} : gmem_info();  // (unused while the table is zero)
+}
+
+static VkDescriptorBufferInfo pmemh_info(void) {
+    pmem_import();
+    return ptab_buf && pmemh_buf ? (VkDescriptorBufferInfo){pmemh_buf, 0, pmemh_bytes} : pmem_info();  // (unused: pool <= 2 GB)
 }
 
 static VkDescriptorBufferInfo ptab_info(void) {
@@ -4707,9 +4729,9 @@ static bool pmm_mirror_all(void) {
     if (on < 0) on = getenv("XC3_PMM_MIRROR") != NULL;
     return on;
 }
-// [addr, addr + size) in the alias region on pool pages in a row: their offset in pmem_buf and the bytes from there to
-// the end of the last page of the range
-static bool pool_run(uint64_t addr, uint64_t size, VkDeviceSize *off, uint64_t *limit) {
+// [addr, addr + size) in the alias region on pool pages in a row, all in one of the pool's imports (pool_buf): that
+// import, the offset in it and the bytes from there to the end of the last page of the range
+static bool pool_run(uint64_t addr, uint64_t size, VkBuffer *buf, VkDeviceSize *off, uint64_t *limit) {
     uint64_t psize;
     const uint32_t *ptab;
     pmem_import();
@@ -4720,7 +4742,9 @@ static bool pool_run(uint64_t addr, uint64_t size, VkDeviceSize *off, uint64_t *
     if (!ptab[p0]) return false;
     for (uint64_t p = p0 + 1; p <= p1; p++)
         if (ptab[p] != ptab[p0] + (uint32_t)(p - p0)) return false;
-    *off = (uint64_t)(ptab[p0] - 1) * PLAT_PMEM_PAGE + (addr & (PLAT_PMEM_PAGE - 1));
+    if ((ptab[p0] - 1 < PMEM_LO_PAGES) != (ptab[p1] - 1 < PMEM_LO_PAGES)) return false;  // (across the two imports)
+    *buf = pool_buf((uint64_t)(ptab[p0] - 1) * PLAT_PMEM_PAGE + (addr & (PLAT_PMEM_PAGE - 1)), off, NULL);
+    if (!*buf) return false;
     *limit = (p1 + 1 - p0) * PLAT_PMEM_PAGE - (addr & (PLAT_PMEM_PAGE - 1));
     return true;
 }
@@ -4762,9 +4786,10 @@ static void pmm_refresh(void) {  // after a draw that wrote pm_pend (outside a r
     if (!pmm_mirror_all()) {  // (read from the pool in place: pool_run)
         int n = 0;
         for (int i = 0; i < npm_pend; i++) {
+            VkBuffer b;
             VkDeviceSize o;
             uint64_t l;
-            if (!pool_run(pm_pend[i].lo, pm_pend[i].hi - pm_pend[i].lo, &o, &l)) pm_pend[n++] = pm_pend[i];
+            if (!pool_run(pm_pend[i].lo, pm_pend[i].hi - pm_pend[i].lo, &b, &o, &l)) pm_pend[n++] = pm_pend[i];
         }
         if (!(npm_pend = n)) return;
     }
@@ -4776,24 +4801,29 @@ static void pmm_refresh(void) {  // after a draw that wrote pm_pend (outside a r
         if (!m) continue;
         m->wframe = renderer_present_count();
         lo = m->base, hi = m->base + m->size;  // (whole: a grown mirror is filled from the pool)
-        VkBufferCopy cp[64];
-        int nc = 0;
+        VkBufferCopy cp[2][64];  // (from each of the pool's imports)
+        int nc[2] = {0, 0};
+        VkBuffer src[2] = {pmem_buf, pmemh_buf};
         for (uint64_t a = lo; a < hi;) {
             uint64_t pg_end = (a | (PLAT_PMEM_PAGE - 1)) + 1, e = pg_end < hi ? pg_end : hi;
             uint32_t pe = ptab[(a - maxwell_pmem_base) / PLAT_PMEM_PAGE];
-            if (pe) cp[nc++] = (VkBufferCopy){(uint64_t)(pe - 1) * PLAT_PMEM_PAGE + (a & (PLAT_PMEM_PAGE - 1)), a - m->base, e - a};
-            if (nc == 64) { vkCmdCopyBuffer(cb, pmem_buf, m->buf, 64, cp); nc = 0; }
+            if (pe) {
+                VkDeviceSize in;
+                int h = pool_buf((uint64_t)(pe - 1) * PLAT_PMEM_PAGE + (a & (PLAT_PMEM_PAGE - 1)), &in, NULL) != pmem_buf;
+                if (src[h]) cp[h][nc[h]++] = (VkBufferCopy){in, a - m->base, e - a};
+                if (nc[h] == 64) { vkCmdCopyBuffer(cb, src[h], m->buf, 64, cp[h]); nc[h] = 0; }
+            }
             a = e;
         }
-        if (nc) vkCmdCopyBuffer(cb, pmem_buf, m->buf, (uint32_t)nc, cp);
+        for (int h = 0; h < 2; h++)
+            if (nc[h]) vkCmdCopyBuffer(cb, src[h], m->buf, (uint32_t)nc[h], cp[h]);
     }
     vk_full_barrier(cb);
     npm_pend = 0;
 }
 static bool pmem_direct(uint64_t addr, uint64_t size, VkBuffer *buf, VkDeviceSize *off) {
     uint64_t limit;
-    if (!pmm_mirror_all() && pool_run(addr, size, off, &limit)) {
-        *buf = pmem_buf;
+    if (!pmm_mirror_all() && pool_run(addr, size, buf, off, &limit)) {
         g_direct_limit = limit;
         return true;
     }
@@ -5037,7 +5067,7 @@ static VkDescriptorSet stage_set(Prog *p, VkDescriptorSetLayout layout, uint32_t
             w[n].pBufferInfo = &bi[n];
         } else if (b->type == VK_DESCRIPTOR_TYPE_STORAGE_BUFFER) {
             bi[n] = b->binding == GFAST_BUFFER_INDEX ? gfast_info() : b->binding == PMEM_BUFFER_INDEX ? pmem_info()
-                    : b->binding == PTAB_BUFFER_INDEX ? ptab_info() : gmem_info();
+                    : b->binding == PMEM_HI_BUFFER_INDEX ? pmemh_info() : b->binding == PTAB_BUFFER_INDEX ? ptab_info() : gmem_info();
             w[n].pBufferInfo = &bi[n];
         } else {
             continue;  // rscale / tint: written below, once the textures (and their scales) are known

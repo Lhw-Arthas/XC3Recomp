@@ -110,6 +110,11 @@ extern uint64_t maxwell_gmem_base, maxwell_gmem_size;
 // `buffer PMem { uint w[]; } pmem_` (exec.c pmem_info, kernel.c pmem_map). maxwell_pmem_size 0: off (output unchanged).
 #define PMEM_BUFFER_INDEX 23
 #define PTAB_BUFFER_INDEX 24
+// The pool is imported as two allocations (one Vulkan allocation may not exceed 2 GB: the AMD driver's
+// maxMemoryAllocationSize; pages past it faulted on the GPU): pool pages [0, PMEM_LO_PAGES) in pmem_, the rest from
+// page PMEM_LO_PAGES on in `buffer PMemH { uint w[]; } pmemh_` (exec.c pmem_import).
+#define PMEM_HI_BUFFER_INDEX 25
+#define PMEM_LO_PAGES 0x8000u  // (64 KB pages: 2 GB)
 extern uint64_t maxwell_pmem_base, maxwell_pmem_size;
 // Debug: when translating the shader whose code starts at maxwell_dbg_code, output register
 // maxwell_dbg_reg as captured after the instruction at maxwell_dbg_pc (greyscale, all targets).

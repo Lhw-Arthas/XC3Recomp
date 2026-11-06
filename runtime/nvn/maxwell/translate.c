@@ -1220,8 +1220,9 @@ static void emit_tex(Ctx *c, uint64_t w, bool bindless) {
 
 // ------------------------------------------------------------------ instruction translation
 // [XC3] Global memory access (LDG / STG / ATOM, GLSL): opens a block with `ga` (byte offset in the buffer), `ok` (inside it)
-// and, when the alias region is paged (maxwell_pmem_size), `pm` (ga is in the physical memory pool, pmem_, not the
-// heap, gmem_). gw / gst / gat: a word load, a word store, an atomic on word idx of whichever buffer that is.
+// and, when the alias region is paged (maxwell_pmem_size), `pm` (ga is in the physical memory pool, not the heap,
+// gmem_) and `ph` (in the pool's second import, pmemh_: pool pages from PMEM_LO_PAGES on; ga then counts from there).
+// gw / gst / gat: a word load, a word store, an atomic on word idx of whichever buffer that is.
 static void gmem_access(Ctx *c, const char *addr, bool atom) {
     if (!c->glsl || !maxwell_pmem_size) {
         if (atom)
@@ -1233,38 +1234,41 @@ static void gmem_access(Ctx *c, const char *addr, bool atom) {
         return;
     }
     c->uses_pmem = true;
-    sp(&c->body, "    { ulong ad = %s; ulong ga = ad - 0x%llxul; bool ok = ga < 0x%llxul; bool pm = false;\n", addr,
+    sp(&c->body, "    { ulong ad = %s; ulong ga = ad - 0x%llxul; bool ok = ga < 0x%llxul; bool pm = false, ph = false;\n", addr,
        (unsigned long long)maxwell_gmem_base, (unsigned long long)maxwell_gmem_size);
     sp(&c->body, "      if (!ok && ad - 0x%llxul < 0x%llxul) { uint pe = ptab_.w[uint((ad - 0x%llxul) >> 16)];\n"
-                 "        if (pe != 0u) { ga = (ulong(pe - 1u) << 16) | (ad & 0xFFFFul); ok = true; pm = true; } }\n",
-       (unsigned long long)maxwell_pmem_base, (unsigned long long)maxwell_pmem_size, (unsigned long long)maxwell_pmem_base);
+                 "        if (pe != 0u) { ph = pe > 0x%xu; ga = (ulong(pe - 1u - (ph ? 0x%xu : 0u)) << 16) | (ad & 0xFFFFul); ok = true; pm = true; } }\n",
+       (unsigned long long)maxwell_pmem_base, (unsigned long long)maxwell_pmem_size, (unsigned long long)maxwell_pmem_base,
+       PMEM_LO_PAGES, PMEM_LO_PAGES);
     if (atom) sp(&c->body, "      ok = ok && (ga & 3ul) == 0ul;\n");
 }
 
 static const char *gw(Ctx *c, const char *idx) {
-    static _Thread_local char buf[8][256];
+    static _Thread_local char buf[8][384];
     static _Thread_local int k;
     char *o = buf[k++ & 7];
-    if (c->uses_pmem) snprintf(o, 256, "(pm ? pmem_.w[%s] : gmem_.w[%s])", idx, idx);
-    else snprintf(o, 256, "gmem_.w[%s]", idx);
+    if (c->uses_pmem) snprintf(o, 384, "(pm ? (ph ? pmemh_.w[%s] : pmem_.w[%s]) : gmem_.w[%s])", idx, idx, idx);
+    else snprintf(o, 384, "gmem_.w[%s]", idx);
     return o;
 }
 
 static const char *gst(Ctx *c, const char *idx, const char *v) {
-    static _Thread_local char buf[4][320];
+    static _Thread_local char buf[4][640];
     static _Thread_local int k;
     char *o = buf[k++ & 3];
-    if (c->uses_pmem) snprintf(o, 320, "{ if (pm) pmem_.w[%s] = %s; else gmem_.w[%s] = %s; }", idx, v, idx, v);
-    else snprintf(o, 320, "gmem_.w[%s] = %s;", idx, v);
+    if (c->uses_pmem)
+        snprintf(o, 640, "{ if (!pm) gmem_.w[%s] = %s; else if (ph) pmemh_.w[%s] = %s; else pmem_.w[%s] = %s; }", idx, v, idx, v, idx, v);
+    else snprintf(o, 640, "gmem_.w[%s] = %s;", idx, v);
     return o;
 }
 
 static const char *gat(Ctx *c, const char *fn, const char *idx, const char *v) {
-    static _Thread_local char buf[4][320];
+    static _Thread_local char buf[4][640];
     static _Thread_local int k;
     char *o = buf[k++ & 3];
-    if (c->uses_pmem) snprintf(o, 320, "(pm ? %s(pmem_.w[%s], %s) : %s(gmem_.w[%s], %s))", fn, idx, v, fn, idx, v);
-    else snprintf(o, 320, "%s(gmem_.w[%s], %s)", fn, idx, v);
+    if (c->uses_pmem)
+        snprintf(o, 640, "(pm ? (ph ? %s(pmemh_.w[%s], %s) : %s(pmem_.w[%s], %s)) : %s(gmem_.w[%s], %s))", fn, idx, v, fn, idx, v, fn, idx, v);
+    else snprintf(o, 640, "%s(gmem_.w[%s], %s)", fn, idx, v);
     return o;
 }
 
@@ -2020,7 +2024,7 @@ static void emit_insn(Ctx *c, uint64_t w, uint32_t pc) {
             if (!store) {
                 if (size < 4) {
                     if (d != RZ) {
-                        char fast[160], slow[384];
+                        char fast[160], slow[512];
                         snprintf(fast, sizeof fast, gl_small[size], "gfast_.w[fw]");
                         snprintf(slow, sizeof slow, gl_small[size], gw(c, "uint(ga >> 2)"));
                         c->reg_used[d] = 1;
@@ -2064,7 +2068,7 @@ static void emit_insn(Ctx *c, uint64_t w, uint32_t pc) {
             if (!store) {
                 if (size < 4) {
                     if (d != RZ) {
-                        char ld[384];
+                        char ld[512];
                         snprintf(ld, sizeof ld, gl_small[size], gw(c, "uint(ga >> 2)"));
                         c->reg_used[d] = 1;
                         sp(&c->body, "      if (ok) r%d = %s; else r%d = 0u;\n", d, ld, d);
@@ -2469,6 +2473,8 @@ static ShaderInfo *glsl_finish(Ctx *c, bool any_branch, bool dbg) {
     if (c->uses_pmem) {  // [XC3]
         sp(&s, "layout(std430, set = %d, binding = %d) %sbuffer PMem { uint w[]; } pmem_;\n", set, PMEM_BUFFER_INDEX,
            c->uses_gmem_store ? "" : "readonly ");
+        sp(&s, "layout(std430, set = %d, binding = %d) %sbuffer PMemH { uint w[]; } pmemh_;\n", set, PMEM_HI_BUFFER_INDEX,
+           c->uses_gmem_store ? "" : "readonly ");
         sp(&s, "layout(std430, set = %d, binding = %d) readonly buffer PTab { uint w[]; } ptab_;\n", set, PTAB_BUFFER_INDEX);
     }
     if (xfb) sp(&s, "layout(std140, set = 0, binding = %d) uniform XfbP { uvec4 xfbp[2]; };\n", XFB_PARAM_INDEX);
@@ -2591,8 +2597,9 @@ static ShaderInfo *glsl_finish(Ctx *c, bool any_branch, bool dbg) {
                 else snprintf(v, sizeof v, "0u");
                 if (c->uses_pmem)
                     sp(&s, "      if (xpm) { uint64_t a = xad + uint64_t(xw + %uu) * 4ul; uint pe = ptab_.w[uint(a >> 16)];\n"
-                           "        if (pe != 0u) pmem_.w[uint(((uint64_t(pe - 1u) << 16) | (a & 0xFFFFul)) >> 2)] = %s; }\n"
-                           "      else gmem_.w[xw + %uu] = %s;\n", w, v, w, v);
+                           "        if (pe > 0x%xu) pmemh_.w[uint(((uint64_t(pe - 1u - 0x%xu) << 16) | (a & 0xFFFFul)) >> 2)] = %s;\n"
+                           "        else if (pe != 0u) pmem_.w[uint(((uint64_t(pe - 1u) << 16) | (a & 0xFFFFul)) >> 2)] = %s; }\n"
+                           "      else gmem_.w[xw + %uu] = %s;\n", w, PMEM_LO_PAGES, PMEM_LO_PAGES, v, v, w, v);
                 else
                     sp(&s, "      gmem_.w[xw + %uu] = %s;\n", w, v);
             }

@@ -223,7 +223,7 @@ static uint32_t pmem_map(uint64_t addr, uint64_t size) {
     for (uint64_t a = lo; a < addr + size; a += PLAT_PMEM_PAGE) need += !pmem_ptab[(a - ALIAS_BASE) / PLAT_PMEM_PAGE];
     uint64_t pool_pages = pmem_size / PLAT_PMEM_PAGE;
     if (need > pmem_nfree + (pool_pages - pmem_next)) return 0x10801;  // (the heap shrank since)
-    // Prefer a contiguous ascending run in pmem_buf so GPU vertex/index fetches can read pmem_buf directly (exec.c pmem_direct).
+    // Prefer a contiguous ascending run of pool pages so GPU vertex/index fetches can read the pool directly (exec.c pmem_direct).
     bool free_contig = false;
     if (need > 1 && pmem_nfree >= need) {
         free_contig = true;
