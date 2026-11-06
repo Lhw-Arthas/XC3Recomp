@@ -17,7 +17,11 @@ RES=build/launcher/launcher.res  # [XC3] the icon (tools/launcher/make_icon.py -
 # [XC3] linked under a new name, then swapped in: Windows refuses to overwrite a running exe (the launcher rebuilding
 # itself from its "Install & build" tab, or Build XC3.bat with the launcher open) but lets it be renamed
 NEW=${OUT%.exe}.new.exe OLD=${OUT%.exe}.old.exe
-$Z -o $NEW build/launcher/*.o $RES $M/lib/libSDL3.dll.a -march=x86_64_v2 -Wl,--subsystem,windows -static-libstdc++ 2> build/launcher/link.err
+# [XC3] SDL3 linked statically (libSDL3.a + its libiconv, the system libraries from sdl3.pc's Libs.private): the exe
+# needs no SDL3.dll / libiconv-2.dll from MSYS2, so it starts on a PC that has none of the build tools yet (the
+# "Install & build" tab installs them)
+SDL="$M/lib/libSDL3.a $M/lib/libiconv.a -lkernel32 -luser32 -lgdi32 -lwinmm -limm32 -lole32 -loleaut32 -lversion -luuid -ladvapi32 -lsetupapi -lshell32 -ldinput8"
+$Z -o $NEW build/launcher/*.o $RES $SDL -march=x86_64_v2 -Wl,--subsystem,windows -static-libstdc++ 2> build/launcher/link.err
 rc=$?; [ $rc = 0 ] || { cat build/launcher/link.err | head -20; exit $rc; }
 rm -f $OLD ${OLD%.exe}.pdb 2>/dev/null
 [ -f $OUT ] && { mv -f $OUT $OLD 2>/dev/null; [ -f ${OUT%.exe}.pdb ] && mv -f ${OUT%.exe}.pdb ${OLD%.exe}.pdb 2>/dev/null; }

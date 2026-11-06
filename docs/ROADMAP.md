@@ -104,8 +104,11 @@ Done:
 - `scripts/build_all.sh`: dump check, recompilation, build; shader precompilation.
 
 - Launcher tab "Install & build": the game files (folder picker, version check, `targets\` junctions) and the build
-  (`build_all.sh` with a step bar, Stop, log), the launcher swapping its own exe (renamed, not overwritten). The tools
-  are installed by `Build XC3.bat` (first time only).
+  (`build_all.sh` with a step bar, Stop, log), the launcher swapping its own exe (renamed, not overwritten).
+- The tab has the whole first-time setup (2026-11-07): **Build tools** (`setup_windows.ps1`, now with step lines and
+  exit-code checks), Game files, Build, **Shaders** (precompilation). The launcher links SDL3 statically (no MSYS2 DLL
+  needed to start it), and MSYS2's bash runs the build scripts (launcher and `Build XC3.bat`): Git for Windows is no
+  longer needed. Next (not done): a prebuilt launcher in a release zip built by CI, so a new user needs no bat at all.
 
 Open:
 - Choosing an install folder other than the repository.

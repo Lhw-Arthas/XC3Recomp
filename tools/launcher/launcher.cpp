@@ -838,36 +838,46 @@ static void pc_poll() {
 }
 
 // ------------------------------------------------------------------ install & build ([XC3] tab "Instalación y build")
-// What Build XC3.bat does after the tools are installed, from the launcher: the game files (tools/setup_game_files.ps1:
-// the folder dialog, the check, the targets\ junctions; check_dump.py for the state shown) and the build
-// (scripts/build_all.sh in Git Bash, its "=== k/5" lines as the progress; build/build_all.log). The tools themselves
-// (MSYS2, Python, Git) are installed by Build XC3.bat only. The build runs in a job object: Stop and closing the
-// launcher end it with everything it started. The launcher's own exe is swapped by tools/launcher/build.sh (renamed,
-// not overwritten): the new one runs from the next start.
-static HANDLE g_bd_proc, g_bd_job, g_gf_proc, g_gf_pick;
-static int g_bd_step, g_gf_code = -2;  // (game files: -2 not checked, -1 checking, else check_dump.py's exit code)
-static std::string g_bd_line;
+// What Build XC3.bat does, from the launcher, in four steps: the build tools (tools/setup_windows.ps1: MSYS2 and its
+// libraries, Python, .venv; its "=== k/4" lines as the progress; build/setup_windows.log), the game files
+// (tools/setup_game_files.ps1: the folder dialog, the check, the targets\ junctions; check_dump.py for the state shown),
+// the build (scripts/build_all.sh in MSYS2's bash - Git Bash if MSYS2 has none -, its "=== k/5" lines as the progress;
+// build/build_all.log) and the shader precompilation (pc_start). [XC3] The launcher links SDL3 statically
+// (tools/launcher/build.sh), so it starts before any tool is installed. The tools install and the build run in a job
+// object: Stop and closing the launcher end them with everything they started. The launcher's own exe is swapped by
+// tools/launcher/build.sh (renamed, not overwritten): the new one runs from the next start.
+static HANDLE g_bd_proc, g_bd_job, g_gf_proc, g_gf_pick, g_tl_proc;
+static int g_bd_step, g_tl_step, g_gf_code = -2;  // (game files: -2 not checked, -1 checking, else check_dump.py's exit code)
+static std::string g_bd_line, g_tl_line;
 static bool g_bd_new_launcher;
 static FILETIME g_self_time;
 
+// [XC3] MSYS2's bash first (setup_windows.ps1 installs it: no Git for Windows needed), then Git Bash
 static std::string bd_bash() {
-    std::string c[2];
-    if (const char *p = getenv("ProgramFiles")) c[0] = std::string(p) + "\\Git\\bin\\bash.exe";
-    if (const char *p = getenv("LOCALAPPDATA")) c[1] = std::string(p) + "\\Programs\\Git\\bin\\bash.exe";
+    std::string c[3] = {"C:\\msys64\\usr\\bin\\bash.exe"};
+    if (const char *p = getenv("ProgramFiles")) c[1] = std::string(p) + "\\Git\\bin\\bash.exe";
+    if (const char *p = getenv("LOCALAPPDATA")) c[2] = std::string(p) + "\\Programs\\Git\\bin\\bash.exe";
     for (auto &s : c) if (!s.empty() && GetFileAttributesA(s.c_str()) != INVALID_FILE_ATTRIBUTES) return s;
     return "";
 }
-static bool bd_tools_ok() {
-    return !bd_bash().empty() && exists(".venv/Scripts/python.exe") &&
-           GetFileAttributesA("C:\\msys64\\ucrt64\\lib\\libSDL3.dll.a") != INVALID_FILE_ATTRIBUTES;
+static bool file_ok(const char *p) { return GetFileAttributesA(p) != INVALID_FILE_ATTRIBUTES; }
+static bool tl_msys_ok() {  // (the libraries Build XC3.bat checks for)
+    return file_ok("C:\\msys64\\ucrt64\\lib\\libSDL3.dll.a") && file_ok("C:\\msys64\\ucrt64\\lib\\libshaderc_shared.dll.a");
 }
+static bool bd_tools_ok() { return !bd_bash().empty() && exists(".venv/Scripts/python.exe") && tl_msys_ok(); }
+static bool tl_running() { return g_tl_proc != NULL; }
 static bool bd_running() { return g_bd_proc != NULL; }
 static bool gf_busy() { return g_gf_proc != NULL || g_gf_pick != NULL; }
 
-// a hidden process in the repository root, its output in <log> (msys64 on the PATH, as Build XC3.bat)
+// a hidden process in the repository root, its output in <log> (msys64 on the PATH, as Build XC3.bat; [XC3] its
+// usr\bin too, once: MSYS2's bash started directly, not as a login shell, finds sed / cp / mkdir there)
 static HANDLE bd_spawn(const std::string &exe, const std::string &args, const char *log, HANDLE job) {
-    const char *old = getenv("PATH");
-    std::string p = std::string("C:\\msys64\\ucrt64\\bin;") + (old ? old : "");
+    char cur[32768];
+    DWORD n = GetEnvironmentVariableA("PATH", cur, sizeof cur);
+    std::string p = n && n < sizeof cur ? cur : "";
+    for (const char *d : {"C:\\msys64\\ucrt64\\bin;", "C:\\msys64\\usr\\bin;"})
+        for (size_t at; (at = p.find(d)) != std::string::npos;) p.erase(at, strlen(d));
+    p = "C:\\msys64\\ucrt64\\bin;C:\\msys64\\usr\\bin;" + p;  // (ucrt64 first: the game's DLLs)
     SetEnvironmentVariableA("PATH", p.c_str());
     CreateDirectoryA(path("build").c_str(), NULL);
     STARTUPINFOA si = {};
@@ -906,17 +916,62 @@ static void gf_pick() {
     if (!g_gf_pick) g_status = std::string(T("No se pudo abrir el selector (error ")) + std::to_string(GetLastError()) + ")";
 }
 
-static void bd_start() {
-    if (bd_running() || pc_running() || gf_busy()) return;
-    std::string bash = bd_bash();
-    if (bash.empty()) return;
+// the job object the tools install and the build run in (one at a time): closing the launcher ends what they started
+static HANDLE bd_job() {
     if (!g_bd_job) {
         g_bd_job = CreateJobObjectA(NULL, NULL);
         JOBOBJECT_EXTENDED_LIMIT_INFORMATION li = {};
         li.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
         if (g_bd_job) SetInformationJobObject(g_bd_job, JobObjectExtendedLimitInformation, &li, sizeof li);
     }
-    g_bd_proc = bd_spawn(bash, "-c \"scripts/build_all.sh\"", "build/build_all.log", g_bd_job);
+    return g_bd_job;
+}
+// the last 16 KB of a log: the step of its last "=== k/<max> ..." line (1..max) and its last line
+static void log_tail(const char *log, int max, int *step, std::string *line) {
+    FILE *f = fopen(path(log).c_str(), "rb");
+    if (!f) return;
+    fseek(f, 0, SEEK_END);
+    long n = ftell(f), from = n > 16384 ? n - 16384 : 0;
+    std::string t((size_t)(n - from), '\0');
+    fseek(f, from, SEEK_SET);
+    t.resize(fread(&t[0], 1, t.size(), f));
+    fclose(f);
+    size_t s = t.rfind("=== ");
+    if (s != std::string::npos && s + 5 < t.size() && t[s + 4] >= '1' && t[s + 4] <= '0' + max) *step = t[s + 4] - '0';
+    size_t e = t.find_last_not_of("\r\n ");
+    if (e != std::string::npos) {
+        size_t b = t.find_last_of('\n', e);
+        *line = t.substr(b == std::string::npos ? 0 : b + 1, e - (b == std::string::npos ? 0 : b + 1) + 1);
+        if (line->size() > 140) *line = line->substr(0, 140) + "...";
+    }
+}
+
+// [XC3] step 1: tools/setup_windows.ps1 (winget may ask for administrator rights to install MSYS2: Windows shows that)
+static void tl_start() {
+    if (tl_running() || bd_running() || pc_running() || gf_busy()) return;
+    char sys[MAX_PATH] = "";
+    GetSystemDirectoryA(sys, sizeof sys);
+    std::string ps = std::string(sys) + "\\WindowsPowerShell\\v1.0\\powershell.exe";
+    g_tl_proc = bd_spawn(ps, "-NoProfile -ExecutionPolicy Bypass -File tools\\setup_windows.ps1", "build/setup_windows.log", bd_job());
+    if (!g_tl_proc) { g_status = std::string(T("Could not start the tools install (error ")) + std::to_string(GetLastError()) + ")"; return; }
+    g_tl_step = 0;
+    g_tl_line.clear();
+    g_status = T("Installing the build tools...");
+}
+static void tl_stop() {
+    if (!g_tl_proc) return;
+    if (g_bd_job) TerminateJobObject(g_bd_job, 1);
+    WaitForSingleObject(g_tl_proc, 3000);
+    CloseHandle(g_tl_proc);
+    g_tl_proc = NULL;
+    g_status = T("Tools install stopped");
+}
+
+static void bd_start() {
+    if (bd_running() || tl_running() || pc_running() || gf_busy()) return;
+    std::string bash = bd_bash();
+    if (bash.empty()) return;
+    g_bd_proc = bd_spawn(bash, "-c \"scripts/build_all.sh\"", "build/build_all.log", bd_job());
     if (!g_bd_proc) { g_status = std::string(T("No se pudo iniciar la compilación (error ")) + std::to_string(GetLastError()) + ")"; return; }
     g_bd_step = 0;
     g_bd_line.clear();
@@ -947,27 +1002,22 @@ static void bd_poll() {
         else if (code != 2) g_status = T("Esa carpeta no sirve (registro: build/setup_game_files.log)");
         gf_check();
     }
-    if (!g_bd_proc) return;
+    if (!g_bd_proc && !g_tl_proc) return;
     static Uint64 last;
     Uint64 now = SDL_GetTicks();
     if (now - last < 300) return;
     last = now;
-    if (FILE *f = fopen(path("build/build_all.log").c_str(), "rb")) {  // the last 16 KB: the current step, the last line
-        fseek(f, 0, SEEK_END);
-        long n = ftell(f), from = n > 16384 ? n - 16384 : 0;
-        std::string t((size_t)(n - from), '\0');
-        fseek(f, from, SEEK_SET);
-        t.resize(fread(&t[0], 1, t.size(), f));
-        fclose(f);
-        size_t s = t.rfind("=== ");
-        if (s != std::string::npos && s + 5 < t.size() && t[s + 4] >= '1' && t[s + 4] <= '5') g_bd_step = t[s + 4] - '0';
-        size_t e = t.find_last_not_of("\r\n ");
-        if (e != std::string::npos) {
-            size_t b = t.find_last_of('\n', e);
-            g_bd_line = t.substr(b == std::string::npos ? 0 : b + 1, e - (b == std::string::npos ? 0 : b + 1) + 1);
-            if (g_bd_line.size() > 140) g_bd_line = g_bd_line.substr(0, 140) + "...";
-        }
+    if (g_tl_proc) {
+        log_tail("build/setup_windows.log", 4, &g_tl_step, &g_tl_line);
+        if (WaitForSingleObject(g_tl_proc, 0) != WAIT_OBJECT_0) return;
+        GetExitCodeProcess(g_tl_proc, &code);
+        CloseHandle(g_tl_proc);
+        g_tl_proc = NULL;
+        g_status = code == 0 && bd_tools_ok() ? T("Build tools installed") : T("The tools install failed (log: build/setup_windows.log)");
+        g_gf_code = -2;  // (check_dump.py needs .venv: check the game files again)
+        return;
     }
+    log_tail("build/build_all.log", 5, &g_bd_step, &g_bd_line);
     if (WaitForSingleObject(g_bd_proc, 0) != WAIT_OBJECT_0) return;
     GetExitCodeProcess(g_bd_proc, &code);
     CloseHandle(g_bd_proc);
@@ -982,6 +1032,27 @@ static void bd_poll() {
 }
 
 static void tab_build() {
+    // [XC3] step 1: the build tools
+    section(T("Build tools"));
+    bool tools = bd_tools_ok();
+    if (tl_running()) {
+        char t[64];
+        snprintf(t, sizeof t, T("Step %d of 4"), g_tl_step ? g_tl_step : 1);
+        ImGui::ProgressBar((g_tl_step ? g_tl_step - 1 : 0) / 4.0f + 0.1f, ImVec2(-150 * g_scale, 0), t);
+        ImGui::SameLine();
+        if (ImGui::Button(T("Stop##tools"), ImVec2(-1, 0))) tl_stop();
+        ImGui::TextDisabled("%s", g_tl_line.c_str());
+        ImGui::TextDisabled("%s", T("Windows may ask for administrator rights to install MSYS2."));
+    } else {
+        if (tools) ImGui::TextColored(pal::accent, "%s", T("Ready: MSYS2 with the libraries, Python 3.12, .venv"));
+        else ImGui::TextColored(pal::warn, "%s", T("Not installed yet: MSYS2 (SDL3, FFmpeg, Vulkan, shaderc, Opus), Python 3.12 and the recompiler packages (a few GB, 10-20 minutes)."));
+        ImGui::BeginDisabled(bd_running() || pc_running() || gf_busy());
+        if (ImGui::Button(tools ? T("Update the build tools") : T("Install the build tools"))) tl_start();
+        ImGui::EndDisabled();
+        ImGui::SameLine();
+        if (ImGui::Button(T("Open log##tools"))) ShellExecuteA(NULL, "open", path("build/setup_windows.log").c_str(), NULL, NULL, SW_SHOWNORMAL);
+    }
+    if (!tools || tl_running()) return;
     section(T("Archivos del juego"));
     if (g_gf_code == -2) gf_check();
     if (g_gf_code == -1 || g_gf_proc) ImGui::TextDisabled("%s", T("Comprobando los archivos del juego..."));
@@ -995,11 +1066,6 @@ static void tab_build() {
     ImGui::EndDisabled();
     ImGui::SetItemTooltip(T("Elige la carpeta que contiene las carpetas exefs y romfs de tu copia del juego."));
     section(T("Compilación"));
-    bool tools = bd_tools_ok();
-    if (!tools) {
-        ImGui::TextColored(pal::warn, "%s", T("Faltan las herramientas de compilación: ejecuta Build XC3.bat una vez (las instala)."));
-        return;
-    }
     ImGui::TextDisabled("%s", T("Recompila el código del juego y compila el runtime y el launcher (unos minutos; la primera vez, 10-20)."));
     if (bd_running()) {
         char t[64];
@@ -1017,6 +1083,15 @@ static void tab_build() {
         if (ImGui::Button(T("Abrir registro"))) ShellExecuteA(NULL, "open", path("build/build_all.log").c_str(), NULL, NULL, SW_SHOWNORMAL);
         if (g_bd_new_launcher) ImGui::TextColored(pal::accent, "%s", T("Vuelve a abrir el launcher para usar la versión nueva."));
     }
+    // [XC3] step 4: the shader precompilation (Play also runs it when it was not done for this build)
+    section(T("Shaders"));
+    if (!file_ok(get_game_exe_path().c_str())) { ImGui::TextDisabled("%s", T("After the build.")); return; }
+    if (pc_running()) { ImGui::TextDisabled("%s", T("Precompiling the shaders (progress at the bottom)...")); return; }
+    if (pc_done()) ImGui::TextColored(pal::accent, "%s", T("Precompiled for this build"));
+    else ImGui::TextColored(pal::warn, "%s", T("Not precompiled for this build yet (a few minutes, once: fewer stutters the first time an area is seen)."));
+    ImGui::BeginDisabled(bd_running() || tl_running());
+    if (ImGui::Button(T("Precompilar shaders"))) pc_start(false);
+    ImGui::EndDisabled();
 }
 
 // ------------------------------------------------------------------ remapping capture
@@ -1544,6 +1619,7 @@ int main(int argc, char **argv) {
     }
     if (!launched) pc_stop();  // (closing the launcher stops a precompilation; what it wrote is kept)
     bd_stop();                 // [XC3] (and a build: build_all.sh starts again from its first step next time)
+    tl_stop();                 // [XC3] (and a tools install: setup_windows.ps1 is safe to run again)
     ImGui_ImplSDLRenderer3_Shutdown();
     ImGui_ImplSDL3_Shutdown();
     ImGui::DestroyContext();

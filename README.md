@@ -114,12 +114,19 @@ The build runs the recompiler on your machine to translate the game's code, then
 
 ### The easy way: `Build XC3.bat`
 
+The only prerequisite is **winget** (App Installer, part of Windows 10 / 11). Git for Windows is not needed: MSYS2's
+bash runs the build scripts.
+
 Run `Build XC3.bat` from the repository root:
 1. **Tools:** If tools are missing, it runs `tools\setup_windows.ps1` to install MSYS2 with SDL3, FFmpeg, Vulkan, shaderc, VMA, and Opus, installs Python 3.12 (via winget), and initializes `.venv` with the necessary packages.
 2. **Game files:** Select the folder containing your extracted `exefs` and `romfs` (version 2.2.0). It verifies file hashes and build-IDs, then links `targets/`.
 3. **Build:** Runs `scripts/build_all.sh` to recompile the ARM64 binaries to C, compile the native game objects, build the runtime executable (`build/xc3.exe`), and build the launcher (`build/xenoblade3_launcher.exe`).
 
-When finished, launch the game with `Play XC3.bat`. On the first launch, click **Precompile shaders**, then click **PLAY**. Shaders are automatically compressed into `cache/spirv.pack` using Zstandard (Zstd), keeping the cache footprint around ~2.5–3.5 GB (down from ~15 GB uncompressed). Existing uncompressed caches can be compressed with `build/xc3.exe --repack-spirv` or `python tools/repack_spirv.py`.
+The launcher's **Install & build** tab does the same four steps with progress bars and logs: **Build tools**
+(`tools\setup_windows.ps1`, log `build/setup_windows.log`), **Game files**, **Build** (`build/build_all.log`) and
+**Shaders** (the precompilation). The launcher links SDL3 statically, so it runs on a PC with none of the tools yet.
+
+When finished, launch the game with `Play XC3.bat`. Precompile the shaders once (the **Shaders** step, or **PLAY** does it the first time), then click **PLAY**. Shaders are automatically compressed into `cache/spirv.pack` using Zstandard (Zstd), keeping the cache footprint around ~2.5–3.5 GB (down from ~15 GB uncompressed). Existing uncompressed caches can be compressed with `build/xc3.exe --repack-spirv` or `python tools/repack_spirv.py`.
 
 ### By hand
 
@@ -129,7 +136,8 @@ When finished, launch the game with `Play XC3.bat`. On the first launch, click *
      pacman -S mingw-w64-ucrt-x86_64-sdl3 mingw-w64-ucrt-x86_64-vulkan-devel mingw-w64-ucrt-x86_64-shaderc \
                mingw-w64-ucrt-x86_64-vulkan-memory-allocator mingw-w64-ucrt-x86_64-ffmpeg mingw-w64-ucrt-x86_64-opus
      ```
-   - Python 3.12+ and [Git for Windows](https://git-scm.com/download/win).
+   - Python 3.12+ (the python.org build). The build scripts run in MSYS2's bash (`C:\msys64\usr\bin\bash.exe`, with
+     `C:\msys64\ucrt64\bin` and `C:\msys64\usr\bin` on the PATH) or in Git Bash.
    - Python virtual environment with Zig (used as the C compiler) and binary analysis tools:
      ```bash
      python -m venv .venv
@@ -144,7 +152,7 @@ When finished, launch the game with `Play XC3.bat`. On the first launch, click *
    ```bash
    cd tools && ../.venv/Scripts/python -X utf8 gen_all.py --out ../generated && cd ..
    ```
-4. **Compile game objects and runtime** (in Git Bash):
+4. **Compile game objects and runtime** (in MSYS2's bash or Git Bash):
    ```bash
    XCDE_SKIP_BOOT_LINK=1 scripts/build_boot.sh   # Recompiled game -> build/obj/
    scripts/build_rt_gfx.sh                       # Runtime + Vulkan renderer -> build/xc3.exe

@@ -9,15 +9,6 @@ echo.
 echo  Xenoblade Chronicles 3 build
 echo  ============================
 
-rem ---- Git Bash runs the build scripts
-set "BASH=%ProgramFiles%\Git\bin\bash.exe"
-if not exist "%BASH%" set "BASH=%LocalAppData%\Programs\Git\bin\bash.exe"
-if not exist "%BASH%" (
-    echo.
-    echo  Git for Windows is needed ^(https://git-scm.com/download/win^). Install it and run this again.
-    goto :fail
-)
-
 rem ---- 1. tools: MSYS2 + libraries, Python + .venv
 set "SETUP="
 if not exist "C:\msys64\ucrt64\lib\libSDL3.dll.a" set "SETUP=1"
@@ -33,7 +24,17 @@ if defined SETUP (
 ) else (
     echo  1. Build tools: ready
 )
-set "PATH=C:\msys64\ucrt64\bin;%PATH%"
+rem [XC3] MSYS2's bash runs the build scripts (Git Bash only if MSYS2 has none): Git for Windows is not needed.
+rem Started directly (not as a login shell), it finds sed / cp / mkdir through MSYS2's usr\bin on the PATH.
+set "BASH=C:\msys64\usr\bin\bash.exe"
+if not exist "%BASH%" set "BASH=%ProgramFiles%\Git\bin\bash.exe"
+if not exist "%BASH%" set "BASH=%LocalAppData%\Programs\Git\bin\bash.exe"
+if not exist "%BASH%" (
+    echo.
+    echo  No bash found: C:\msys64\usr\bin\bash.exe is missing. Run this again to install the build tools.
+    goto :fail
+)
+set "PATH=C:\msys64\ucrt64\bin;C:\msys64\usr\bin;%PATH%"
 
 rem ---- 2. your game files
 ".venv\Scripts\python.exe" -X utf8 tools\extract\check_dump.py targets >nul 2>nul
@@ -65,7 +66,8 @@ if errorlevel 1 (
     goto :fail
 )
 echo.
-echo  Optional: FSR 3.1 and DLSS need vendor DLLs that are not included ^(README, "Building", step 5^).
+echo  Next: the launcher's "Install ^& build" tab precompiles the shaders ^(a few minutes, once^); PLAY also does it.
+echo  Optional: DLSS needs NVIDIA Streamline, not included ^(README, "Building", step 5^). FSR 3.1 / FSR 4 are included.
 choice /m " Start the launcher now"
 if not errorlevel 2 start "" "build\xenoblade3_launcher.exe"
 endlocal
