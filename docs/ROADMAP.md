@@ -2,7 +2,7 @@
 
 The plan for the native Windows port of *Xenoblade Chronicles 3* (version 2.2.0, build ID `82D187FE9EF9BE92`).
 Each phase lists what is done and what is open; update it when an item lands (commit hash) or a new one is found.
-Status as of 2026-11-05.
+Status as of 2026-11-06.
 
 ## Phase 1: Native Windows development
 
@@ -18,6 +18,9 @@ Done:
 - Vulkan executor: `CMD_WAIT_SYNC` (command 50) implemented with in-pass barrier flush.
 - ASTC textures decoded by a compute shader on the GPU, with the CPU decoder as fallback (`xc3.ini astc_decoder = cpu`
   or `XC3_ASTC_CPU=1` to force it); Zstd-compressed SPIR-V cache; forced 16x anisotropic filtering (`7baedf6`).
+- The physical memory pool is imported into Vulkan as two allocations of at most 2 GB (`a568719`). As one 3.2 GB
+  allocation the AMD driver (maxMemoryAllocationSize 2 GB) accepted it, but shader reads past 2 GB faulted: GPU page
+  fault, device lost (a driver timeout) on every jump into map 22. Shaders now pick the import by pool page.
 
 Open:
 - Black / red box by the Colony 9 waterfall: one draw (vs `61e0c6ed00`, fs `61e0c6f400`, G-buffer albedo pure red).
@@ -44,9 +47,22 @@ Done:
   translation lock ("lock" in [build-wait]).
 - Frame lag at the 60 option (launcher / F1 "Frame lag (60 FPS)", `xc3.ini frame_lag`, default on): one frame in
   flight instead of CPU and GPU taking turns; Colony 9 replay 52 -> 60 fps, ~10 min of live play without issues.
+- SPIR-V cache index that outlived its pack: entries pointing past the pack are stored again instead of compiled
+  every session (`15a5241`); the precompile stamp names the exe that ran it (`ea6a677`).
+- Pipeline variant seed `data/variants_seed_xc3.bin` (`58c8f71`): 6,806 variants recorded in play (opening, Colony 9);
+  precompilation builds 6,403 pipelines on an empty cache instead of 2,544.
+- Map-jump tour (`40a0d85`): `XCDE_TOUR` steps `jump <map> <point hash>` (the map menu's fast travel, request type 1)
+  and `jumppos`, run in hidden batches by `tools/xc3_tour.py` (scratch save, per-point summary, captures). The jump
+  list (`build/tours/xc3_jumps.txt`, from the game's own jump point table) is generated locally and never committed.
+  First full run: maps 18-21 and the start of 22 reached without a crash (850 points); it found the map 22 GPU fault
+  above. Resumed after the fix: map 22 complete, the remaining maps in progress.
 
 Open:
 - Test beyond the title screen, opening and Colony 9: Everblight canyon, battles, long cutscenes, other regions.
+  The tour covers loading and rendering of each jump point, not battles, cutscenes or story progress.
+- Tour follow-ups: finish maps 23 and up; the worst first-visit hitches (up to 6.5 s in map 20 on a fresh cache);
+  feed the variants the tour records into the seed so precompilation covers those areas; jump points of maps 0, 1
+  and 17 land in a dark scene (not field maps, probably).
 - Render-thread CPU cost (~2.7 us per draw), ~800 pass splits per frame (writer draws + game barriers), ~75 hitches
   per replay (mostly loading).
 - Validate save loading and story progression; stability across areas.
@@ -92,8 +108,9 @@ Before publishing:
 - Check the licences of third-party code and SDKs for redistribution (`LICENSE`, `NOTICE.md`): LASRecomp / Monado,
   FidelityFX SDK, Streamline / DLSS, SDL.
 - No Nintendo / Monolith Soft assets or branding in the repository or test builds.
-- README for XC3: done (`7baedf6`); its repository layout still lists `data/variants_seed.bin`, removed in the same
-  commit. That file (27 MB) stays in the git history: include it in the audit above.
+- README for XC3: done (`7baedf6`), updated 2026-11-06 (`build/xc3.exe`, `fsr4`, the tour; the layout lists
+  `data/variants_seed_xc3.bin`). The old `data/variants_seed.bin` (27 MB, removed in `7baedf6`) stays in the git history: include it in
+  the audit above.
 
 Then:
 - Build and installation documentation; test builds; issue reporting and contribution guidelines

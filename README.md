@@ -24,7 +24,7 @@ tooling and configuration are specialized for XC3 (`Build XC3.bat`, `Play XC3.ba
 ## Status
 
 The project is currently in active development (**Phases 1 & 2** of the [Roadmap](docs/ROADMAP.md)):
-- **Playable areas:** The opening sequence, title screen, early cutscenes, and Colony 9 are running with full audio, video playback, and controls on Windows (tested on NVIDIA RTX and AMD GPUs).
+- **Playable areas:** The opening sequence, title screen, early cutscenes, and Colony 9 are running with full audio, video playback, and controls on Windows (tested on NVIDIA RTX and AMD GPUs). An automated map-jump tour (`tools/xc3_tour.py`) visits the game's fast-travel points: the first five field maps have been reached without a crash so far, the rest is being toured.
 - **Performance & graphics features:** In-place alias memory pool reads, multi-threaded Zstd-compressed SPIR-V shader cache reads, automatic ASTC GPU compute shader decoding, transform feedback draw support (`nvnCommandBufferDrawTransformFeedback`), GPU queue sync (`CMD_WAIT_SYNC`), shadow-pass async builds, forced 16x anisotropic filtering, and a 60 FPS mode with a frame-lag reduction option.
 - **Under active work:** Visual fixes (e.g. Colony 9 waterfall draw artifact) and testing gameplay stability across later regions and extended battles. See [Known issues](#known-issues) and [`docs/ROADMAP.md`](docs/ROADMAP.md).
 
@@ -52,6 +52,7 @@ The project is currently in active development (**Phases 1 & 2** of the [Roadmap
 **Robustness & Diagnostics**
 - **Safe saves:** Save commits are verified with an automated backup system kept per session (`save/backup/`).
 - **Session recordings & replay:** Built-in session recorder (`play/<timestamp>`) for diagnostics, regression testing, and performance profiling.
+- **Map-jump tour (developers):** `tools/xc3_tour.py` replays a save load, then fast-travels through a list of jump points in hidden batches (a scratch copy of the save, never the real one) and writes a per-point summary (reached, worst frame time, shader build waits) plus optional captures. The jump list is generated from your own game files and is never committed.
 - **Hardware-aware scaling:** Detects CPU core counts and GPU capabilities, tuning thread pools and memory budgets accordingly.
 
 **Launcher & Setup**
@@ -115,7 +116,7 @@ The build runs the recompiler on your machine to translate the game's code, then
 Run `Build XC3.bat` from the repository root:
 1. **Tools:** If tools are missing, it runs `tools\setup_windows.ps1` to install MSYS2 with SDL3, FFmpeg, Vulkan, shaderc, VMA, and Opus, installs Python 3.12 (via winget), and initializes `.venv` with the necessary packages.
 2. **Game files:** Select the folder containing your extracted `exefs` and `romfs` (version 2.2.0). It verifies file hashes and build-IDs, then links `targets/`.
-3. **Build:** Runs `scripts/build_all.sh` to recompile the ARM64 binaries to C, compile the native game objects, build the runtime executable (`build/xcde.exe`), and build the launcher (`build/xenoblade3_launcher.exe`).
+3. **Build:** Runs `scripts/build_all.sh` to recompile the ARM64 binaries to C, compile the native game objects, build the runtime executable (`build/xc3.exe`), and build the launcher (`build/xenoblade3_launcher.exe`).
 
 When finished, launch the game with `Play XC3.bat`. On the first launch, click **Precompile shaders**, then click **PLAY**. Shaders are automatically compressed into `cache/spirv.pack` using Zstandard (Zstd), keeping the cache footprint around ~2.5–3.5 GB (down from ~15 GB uncompressed). Existing uncompressed caches can be compressed with `build/xc3.exe --repack-spirv` or `python tools/repack_spirv.py`.
 
@@ -158,7 +159,7 @@ Settings are managed via the launcher or directly in `xc3.ini` in the repository
 | Key | Values | Description |
 |---|---|---|
 | `resolution` | `match`, `1`–`3`, `75%`, `50%`, `dynamic` | Rendering resolution scale |
-| `upscaler` | `bilinear`, `fsr`, `fsr3`, `dlss` | Upscaling method |
+| `upscaler` | `bilinear`, `fsr`, `fsr3`, `fsr4`, `dlss` | Upscaling method (`fsr4` falls back to FSR 3.1 when its DLLs are missing) |
 | `upscale_quality` | `native`, `quality`, `balanced`, `performance`, `ultra` | Quality preset for temporal upscalers |
 | `fps` | `30`, `60` | Target framerate |
 | `frame_lag` | `0`, `1` | One frame in flight at 60 FPS to reduce latency |
@@ -174,7 +175,8 @@ In game, **F1** opens the settings overlay.
 
 ## Known issues
 
-- **Early development status:** Active testing is currently focused on the opening and Colony 9 areas. Extended gameplay in later chapters, long battle encounters, and deep story progression are undergoing validation.
+- **Early development status:** Active testing is currently focused on the opening and Colony 9 areas. Extended gameplay in later chapters, long battle encounters, and deep story progression are undergoing validation. The map-jump tour checks that areas load and render; it does not play them.
+- **First visit to an area:** Shader and pipeline builds can still cause hitches of up to a few seconds the first time an area is entered on a fresh cache (measured by the tour); with the shaders cached, later visits hitch much less.
 - **Graphical quirks:**
   - Red / black box artifact near the Colony 9 waterfall (one draw call undergoing investigation).
 - **Memory scaling in long sessions:** Pipeline libraries and driver memory grow over multi-hour play sessions; restarting periodically resolves any accumulated stutter.
