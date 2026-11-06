@@ -50,7 +50,8 @@ Done:
 - SPIR-V cache index that outlived its pack: entries pointing past the pack are stored again instead of compiled
   every session (`15a5241`); the precompile stamp names the exe that ran it (`ea6a677`).
 - Pipeline variant seed `data/variants_seed_xc3.bin` (`58c8f71`): 6,806 variants recorded in play (opening, Colony 9);
-  precompilation builds 6,403 pipelines on an empty cache instead of 2,544.
+  precompilation builds 6,403 pipelines on an empty cache instead of 2,544. Extended with the map-jump tour's variants
+  (maps 18-30): 13,689 variants, 13,116 pipelines built on an empty cache (0 failed, 24 s of the ~4 min).
 - Map-jump tour (`40a0d85`): `XCDE_TOUR` steps `jump <map> <point hash>` (the map menu's fast travel, request type 1)
   and `jumppos`, run in hidden batches by `tools/xc3_tour.py` (scratch save, per-point summary, captures). The jump
   list (`build/tours/xc3_jumps.txt`, from the game's own jump point table) is generated locally and never committed.
@@ -62,8 +63,8 @@ Done:
 Open:
 - Test beyond the title screen, opening and Colony 9: Everblight canyon, battles, long cutscenes, other regions.
   The tour covers loading and rendering of each jump point, not battles, cutscenes or story progress.
-- Tour follow-ups: the worst first-visit hitches (up to 6.5 s in map 20 on a fresh cache, 2.5 s in map 22);
-  feed the variants the tour records into the seed so precompilation covers those areas; jump points of maps 0, 1
+- Tour follow-ups: the worst first-visit hitches (up to 6.5 s in map 20 on a fresh cache, 2.5 s in map 22; to be
+  measured again with the extended seed); jump points of maps 0, 1
   and 17 land in a dark scene (not field maps, probably).
 - Render-thread CPU cost (~2.7 us per draw), ~800 pass splits per frame (writer draws + game barriers), ~75 hitches
   per replay (mostly loading).
