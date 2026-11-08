@@ -1,0 +1,53 @@
+name: release
+# [XC3] A pushed tag v* -> a GitHub Release with XC3Recomp-<tag>.zip: the repository at that tag plus a prebuilt
+# build/xenoblade3_launcher.exe, so a new user extracts it, starts the launcher and does the whole first-time setup
+# from its "Install & build" tab (no .bat, no Git). No game files, no generated code: package_guard.py checks the zip's
+# contents before the upload.
+on:
+  push:
+    tags: ['v*']
+permissions:
+  contents: write   # (softprops/action-gh-release: create the release, upload the zip)
+jobs:
+  release:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      # the launcher's C++ compiler (tools/launcher/build.sh: .venv/Scripts/python -m ziglang), same version as setup
+      - name: .venv with ziglang
+        shell: pwsh
+        run: |
+          python -m venv .venv
+          .venv\Scripts\python -m pip install -q --disable-pip-version-check ziglang==0.16.0
+      # SDL3 (static libSDL3.a + libiconv.a) and its headers from MSYS2 UCRT64, as tools/setup_windows.ps1 installs them
+      - uses: msys2/setup-msys2@v2
+        with:
+          msystem: UCRT64
+          update: true
+          install: mingw-w64-ucrt-x86_64-sdl3 mingw-w64-ucrt-x86_64-libiconv
+      - name: Build the launcher
+        shell: msys2 {0}
+        env:
+          XC3_UCRT64: /ucrt64   # (build.sh's default is /c/msys64/ucrt64; the action installs MSYS2 elsewhere)
+        run: tools/launcher/build.sh
+      - name: Package
+        shell: pwsh
+        run: |
+          $name = "XC3Recomp-${{ github.ref_name }}"
+          New-Item -ItemType Directory -Force dist | Out-Null
+          git archive --format=tar --prefix="$name/" HEAD -o dist/src.tar
+          tar -xf dist/src.tar -C dist; Remove-Item dist/src.tar
+          New-Item -ItemType Directory -Force "dist/$name/build" | Out-Null
+          Copy-Item build/xenoblade3_launcher.exe "dist/$name/build/"
+          python -X utf8 tools/package_guard.py "dist/$name"
+          if ($LASTEXITCODE -ne 0) { exit 1 }
+          Push-Location dist; python -m zipfile -c "$name.zip" "$name"; Pop-Location
+      - uses: softprops/action-gh-release@v3
+        with:
+          files: dist/XC3Recomp-${{ github.ref_name }}.zip
+          generate_release_notes: true

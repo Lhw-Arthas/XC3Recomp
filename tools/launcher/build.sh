@@ -3,7 +3,7 @@
 cd "$(dirname "$0")/../.."
 Z=".venv/Scripts/python -m ziglang c++"
 I=third_party/imgui
-M=/c/msys64/ucrt64
+M=${XC3_UCRT64:-/c/msys64/ucrt64}  # [XC3] MSYS2's UCRT64 prefix (CI: .github/workflows/release.yml sets /ucrt64)
 OUT=build/xenoblade3_launcher.exe
 mkdir -p build/launcher
 for f in $I/imgui.cpp $I/imgui_draw.cpp $I/imgui_tables.cpp $I/imgui_widgets.cpp $I/backends/imgui_impl_sdl3.cpp \

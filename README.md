@@ -112,6 +112,13 @@ You need the game files extracted from your own copy of **Xenoblade Chronicles 3
 
 The build runs the recompiler on your machine to translate the game's code, then compiles it with the dedicated runtime. It takes approximately 10–20 minutes on the first build.
 
+### The easiest way: the release zip
+
+Download `XC3Recomp-<version>.zip` from the repository's **Releases** page and extract it. Start
+`build\xenoblade3_launcher.exe` and go through its **Install & build** tab (described below): build tools, game files,
+build, shaders. The zip has the source and a prebuilt launcher only - no game files; your own 2.2.0 dump is still
+needed.
+
 ### The easy way: `Build XC3.bat`
 
 The only prerequisite is **winget** (App Installer, part of Windows 10 / 11). Git for Windows is not needed: MSYS2's

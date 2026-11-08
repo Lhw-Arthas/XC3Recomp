@@ -108,7 +108,10 @@ Done:
 - The tab has the whole first-time setup (2026-11-07): **Build tools** (`setup_windows.ps1`, now with step lines and
   exit-code checks), Game files, Build, **Shaders** (precompilation). The launcher links SDL3 statically (no MSYS2 DLL
   needed to start it), and MSYS2's bash runs the build scripts (launcher and `Build XC3.bat`): Git for Windows is no
-  longer needed. Next (not done): a prebuilt launcher in a release zip built by CI, so a new user needs no bat at all.
+  longer needed.
+- Release zip built by CI (`.github/workflows/release.yml`, on a pushed tag `v*`): the repository at that tag plus a
+  prebuilt `build/xenoblade3_launcher.exe` (package_guard checked), so a new user extracts it and starts the launcher:
+  no bat at all.
 
 Open:
 - Choosing an install folder other than the repository.
